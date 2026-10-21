@@ -1,0 +1,176 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SXDffle 下拉菜单：显示 / 网址 / 工具 / 调试 -->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:background="@drawable/bg_menu"
+    android:paddingTop="6dp"
+    android:paddingBottom="6dp"
+    android:scrollbars="none">
+
+    <LinearLayout
+        android:layout_width="236dp"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- ===== 显示 ===== -->
+        <TextView
+            style="@style/SxdffleMenuSection"
+            android:text="显示" />
+
+        <TextView
+            android:id="@+id/menuToolbarAlpha"
+            style="@style/SxdffleMenuItem"
+            android:text="导航栏不透明度：100%" />
+
+        <TextView
+            android:id="@+id/menuImmersive"
+            style="@style/SxdffleMenuItem"
+            android:text="沉浸模式（隐藏状态栏）：开" />
+
+        <TextView
+            android:id="@+id/menuAutoHide"
+            style="@style/SxdffleMenuItem"
+            android:text="顶部栏自动收起：关" />
+
+        <TextView
+            android:id="@+id/menuKeepAlive"
+            style="@style/SxdffleMenuItem"
+            android:text="保持后台运行：关" />
+
+        <TextView
+            android:id="@+id/menuDesktopMode"
+            style="@style/SxdffleMenuItem"
+            android:text="浏览模式：PC" />
+
+        <TextView
+            android:id="@+id/menuStageSize"
+            style="@style/SxdffleMenuItem"
+            android:text="渲染分辨率：自动" />
+
+        <!-- ===== 网址 ===== -->
+        <TextView
+            style="@style/SxdffleMenuSection"
+            android:text="网址" />
+
+        <TextView
+            android:id="@+id/menuHome"
+            style="@style/SxdffleMenuItem"
+            android:text="打开首页" />
+
+        <TextView
+            android:id="@+id/menuSetHome"
+            style="@style/SxdffleMenuItem"
+            android:text="把当前页设为首页" />
+
+        <TextView
+            android:id="@+id/menuBookmark"
+            style="@style/SxdffleMenuItem"
+            android:text="收藏当前页" />
+
+        <TextView
+            android:id="@+id/menuBookmarks"
+            style="@style/SxdffleMenuItem"
+            android:text="收藏夹" />
+
+        <!-- ===== 工具 ===== -->
+        <TextView
+            style="@style/SxdffleMenuSection"
+            android:text="工具" />
+
+        <TextView
+            android:id="@+id/menuCopyLogin"
+            style="@style/SxdffleMenuItem"
+            android:text="复制登录态（Cookie）" />
+
+        <TextView
+            android:id="@+id/menuShowToolbar"
+            style="@style/SxdffleMenuItem"
+            android:text="显示顶部导航栏" />
+
+        <TextView
+            android:id="@+id/menuScanFlash"
+            style="@style/SxdffleMenuItem"
+            android:text="重新扫描 Flash" />
+
+        <TextView
+            android:id="@+id/menuEmbedClose"
+            style="@style/SxdffleMenuItem"
+            android:text="关闭内嵌播放" />
+
+        <TextView
+            android:id="@+id/menuExportLog"
+            style="@style/SxdffleMenuItem"
+            android:text="导出日志" />
+
+        <!-- ===== 调试 =====
+             默认只显示「调试功能」这一项；开关打开后，
+             下面这些底层旋钮才出现（普通使用完全不需要动）。 -->
+        <TextView
+            style="@style/SxdffleMenuSection"
+            android:text="调试" />
+
+        <TextView
+            android:id="@+id/menuDebug"
+            style="@style/SxdffleMenuItem"
+            android:text="调试功能：关" />
+
+        <TextView
+            android:id="@+id/menuAudioToggle"
+            style="@style/SxdffleMenuItem"
+            android:text="音频：开" />
+
+        <TextView
+            android:id="@+id/menuExternalToggle"
+            style="@style/SxdffleMenuItem"
+            android:text="ExternalInterface：开" />
+
+        <TextView
+            android:id="@+id/menuEmbedMode"
+            style="@style/SxdffleMenuItem"
+            android:text="Flash 显示：网页内嵌" />
+
+        <TextView
+            android:id="@+id/menuFullscreen"
+            style="@style/SxdffleMenuItem"
+            android:text="全屏运行" />
+
+        <TextView
+            android:id="@+id/menuEmbedZoomIn"
+            style="@style/SxdffleMenuItem"
+            android:text="内嵌放大 ＋" />
+
+        <TextView
+            android:id="@+id/menuEmbedZoomOut"
+            style="@style/SxdffleMenuItem"
+            android:text="内嵌缩小 −" />
+
+        <TextView
+            android:id="@+id/menuEmbedReset"
+            style="@style/SxdffleMenuItem"
+            android:text="内嵌复位（缩放/平移）" />
+
+        <TextView
+            android:id="@+id/menuEmbedRotate"
+            style="@style/SxdffleMenuItem"
+            android:text="内嵌旋转 90°" />
+
+        <TextView
+            android:id="@+id/menuClearCache"
+            style="@style/SxdffleMenuItem"
+            android:text="清理资源缓存" />
+
+        <!-- 版本号：排查问题时先要确认装的是哪个包 -->
+        <TextView
+            android:id="@+id/menuVersion"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingLeft="16dp"
+            android:paddingRight="16dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp"
+            android:textColor="#8899A6"
+            android:textSize="12sp"
+            android:text="版本" />
+    </LinearLayout>
+</ScrollView>

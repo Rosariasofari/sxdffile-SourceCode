@@ -1,0 +1,6 @@
+target/
+build/
+.gradle/
+*.apk
+*.log
+app/src/main/jniLibs/

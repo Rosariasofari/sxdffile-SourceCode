@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SXDffle 浏览器主界面
+
+  布局要点：
+    · 导航栏不在这个布局里 —— 它由 PopupWindow 承载（独立 Window）。
+      原因：SurfaceView 会在 Window 上打洞，同一 Window 内的普通 View
+      与它重叠就会被整块挖掉；要让导航栏浮在游戏画面上只能放另一个 Window。
+    · contentArea 是唯一的内容容器，顶部留白由代码按「导航栏是否显示」决定：
+        显示 → marginTop = 工具栏高度（网页从栏下方开始）
+        收起 / 内嵌播放 → marginTop = 0（全屏，导航栏浮在上面）
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#FF000000">
+
+    <FrameLayout
+        android:id="@+id/contentArea"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <WebView
+            android:id="@+id/webView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!--
+          Flash 内嵌容器：
+          检测到 Flash 后，把原生渲染的 SurfaceView 加进这里，
+          绝对定位到 Flash 元素在屏幕上的位置，从而实现「原地播放」。
+        -->
+        <FrameLayout
+            android:id="@+id/flashContainer"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:background="#FF000000"
+            android:visibility="gone" />
+
+        <!-- 加载进度：贴在内容区顶部（导航栏在它上面浮着） -->
+        <ProgressBar
+            android:id="@+id/progress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_gravity="top"
+            android:max="100"
+            android:progressTint="#FF4CAF50"
+            android:visibility="gone" />
+
+    </FrameLayout>
+
+</FrameLayout>

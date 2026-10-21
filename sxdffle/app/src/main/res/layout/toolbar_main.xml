@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  主工具栏：地址栏 + 前进后退 + Go + 锁定 + 菜单。
+
+  它由 PopupWindow 承载（独立 Window），原因：
+  SurfaceView 会在 Window 上「打洞」，同一 Window 内与它重叠的普通 View
+  会被整块挖掉。要让工具栏浮在游戏画面之上、又能在需要时让出/收起，
+  只能放到另一个 Window。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:id="@+id/toolbarBar"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:background="#FF1F1F1F"
+        android:paddingStart="2dp"
+        android:paddingEnd="2dp">
+
+        <TextView
+            android:id="@+id/btnBack"
+            android:layout_width="40dp"
+            android:layout_height="44dp"
+            android:gravity="center"
+            android:text="◀"
+            android:textColor="#FFE0E0E0"
+            android:textSize="17sp"
+            android:background="?android:attr/selectableItemBackground" />
+
+        <TextView
+            android:id="@+id/btnForward"
+            android:layout_width="40dp"
+            android:layout_height="44dp"
+            android:gravity="center"
+            android:text="▶"
+            android:textColor="#FFE0E0E0"
+            android:textSize="17sp"
+            android:background="?android:attr/selectableItemBackground" />
+
+        <TextView
+            android:id="@+id/btnReload"
+            android:layout_width="40dp"
+            android:layout_height="44dp"
+            android:gravity="center"
+            android:text="⟳"
+            android:textColor="#FFE0E0E0"
+            android:textSize="17sp"
+            android:background="?android:attr/selectableItemBackground" />
+
+        <EditText
+            android:id="@+id/urlBar"
+            android:layout_width="0dp"
+            android:layout_height="38dp"
+            android:layout_weight="1"
+            android:background="#FF2B2B2B"
+            android:hint="输入网址"
+            android:textColor="#FFFFFFFF"
+            android:textColorHint="#FF808080"
+            android:textSize="14sp"
+            android:paddingStart="12dp"
+            android:paddingEnd="8dp"
+            android:imeOptions="actionGo"
+            android:inputType="textUri"
+            android:maxLines="1"
+            android:singleLine="true" />
+
+        <TextView
+            android:id="@+id/btnGo"
+            android:layout_width="40dp"
+            android:layout_height="44dp"
+            android:gravity="center"
+            android:text="Go"
+            android:textColor="#FF4CAF50"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            android:background="?android:attr/selectableItemBackground" />
+
+        <!-- 画面锁定：高亮 = 已锁定，此时不再平移/缩放，所有操作直达游戏 -->
+        <TextView
+            android:id="@+id/btnLock"
+            android:layout_width="38dp"
+            android:layout_height="44dp"
+            android:gravity="center"
+            android:text="🔓"
+            android:textColor="#FF808080"
+            android:textSize="16sp"
+            android:background="?android:attr/selectableItemBackground" />
+
+        <!-- 下拉菜单入口 -->
+        <TextView
+            android:id="@+id/btnMenu"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:gravity="center"
+            android:text="☰"
+            android:textColor="#FFE0E0E0"
+            android:textSize="20sp"
+            android:background="?android:attr/selectableItemBackground" />
+    </LinearLayout>
+
+</LinearLayout>

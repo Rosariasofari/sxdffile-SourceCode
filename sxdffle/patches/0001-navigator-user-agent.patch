@@ -1,0 +1,26 @@
+--- a/frontend-utils/src/backends/navigator.rs
++++ b/frontend-utils/src/backends/navigator.rs
+@@ -83,11 +83,18 @@
+     ) -> Self {
+         let mut builder = reqwest::ClientBuilder::new()
+             .cookie_store(true)
+-            .user_agent(concat!(
+-                "Ruffle/",
+-                env!("CARGO_PKG_VERSION"),
+-                " (https://ruffle.rs)"
+-            ));
++            // ---- SXDffle patch ----
++            // 上游默认 UA 为 "Ruffle/x.y.z (https://ruffle.rs)"。
++            // 许多页游服务器会对 UA 做校验（非浏览器 UA 可能被拒绝或返回降级页面），
++            // 因此默认伪装为桌面浏览器，并允许通过环境变量 SXDFFLE_UA 覆盖，
++            // 以便调试时抓取真实 Flash 插件行为。
++            .user_agent(
++                std::env::var("SXDFFLE_UA").unwrap_or_else(|_| {
++                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
++                     (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
++                        .to_string()
++                }),
++            );
+ 
+         if let Some(referer) = referer {
+             let mut headers = header::HeaderMap::new();

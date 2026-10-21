@@ -1,0 +1,75 @@
+//! SXDffle：AVM2 字节码热点采样。
+//!
+//! 战报加载时 `update` 段单帧 1.4~2.2 秒（PC 上 JIT 只要 0.3 秒），
+//! 优化解释器之前必须先知道**慢在哪种指令**上。
+//!
+//! 采样策略：每 4096 条指令记一次（约每秒万级样本，足够看分布），
+//! 用 `Debug` 取指令名并截断到第一个字段，开销可忽略。
+//! 解释器单线程，所以线程局部的 `RefCell<Vec>` 就够。
+
+use std::cell::RefCell;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+thread_local! {
+    // (指令名, 采样次数, 累计耗时微秒)
+    static COUNTS: RefCell<Vec<(String, u64, u64)>> = const { RefCell::new(Vec::new()) };
+    static LAST: RefCell<Option<std::time::Instant>> = const { RefCell::new(None) };
+}
+
+/// 累计执行指令数（每采样一次 +4096，即采样步长）。
+///
+/// 光有「占比」不够：战报加载 10 分钟到底是**指令太多**还是**单条太慢**，
+/// 必须用「指令数 ÷ 耗时」来判断。正常解释器 20~50ns/条，
+/// 若实测 500ns/条，说明是 dispatch 或某个 API 的实现问题；
+/// 若只是条目多到几十亿，那说明游戏本身的计算量就是这么大，得换思路。
+static TOTAL_OPS: AtomicU64 = AtomicU64::new(0);
+
+/// 记录一条指令（已截断的变体名，如 `GetPropertyFast`）。
+///
+/// 同时记录「距上一次采样过了多久」，把它归给当前这条指令。
+/// 这是找 `1897 ns/条` 那种异常值的唯一办法：次数占比说明不了问题
+/// （`GetLocal` 占 25% 但每条只要几纳秒），**耗时占比**才能指出
+/// 是哪条指令背后挂着几百毫秒的 native 工作（`Array.sort`、`BitmapData` 构造、
+/// 字符串 O(n²) 拼接……）。
+pub fn note(name: &str) {
+    TOTAL_OPS.fetch_add(4096, Ordering::Relaxed);
+    let now = std::time::Instant::now();
+    let dt = LAST.with(|l| {
+        let mut slot = l.borrow_mut();
+        let dt = slot.map(|t| now.duration_since(t).as_micros() as u64).unwrap_or(0);
+        *slot = Some(now);
+        dt
+    });
+    COUNTS.with(|c| {
+        let mut v = c.borrow_mut();
+        if let Some(e) = v.iter_mut().find(|(n, _, _)| n == name) {
+            e.1 += 1;
+            e.2 += dt;
+        } else if v.len() < 96 {
+            v.push((name.to_string(), 1, dt));
+        }
+    });
+}
+
+/// 累计执行的指令数。
+pub fn total_ops() -> u64 {
+    TOTAL_OPS.load(Ordering::Relaxed)
+}
+
+/// 取出计数并清零，按耗时降序返回 (指令名, 采样次数, 耗时微秒)。
+pub fn take() -> Vec<(String, u64, u64)> {
+    COUNTS.with(|c| {
+        let mut v = std::mem::take(&mut *c.borrow_mut());
+        v.sort_by(|a, b| b.2.cmp(&a.2));
+        v
+    })
+}
+
+/// 从 `Op` 的 Debug 输出里截出变体名。
+#[inline]
+pub fn variant_name(debug: &str) -> &str {
+    let end = debug
+        .find(|c: char| c == ' ' || c == '{' || c == '(' || c == ',')
+        .unwrap_or(debug.len());
+    &debug[..end]
+}

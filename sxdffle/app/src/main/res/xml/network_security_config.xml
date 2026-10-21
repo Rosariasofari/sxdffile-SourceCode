@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  SXDffle 网络安全配置
+  =====================================================================
+  必须显式放行明文 HTTP，原因是：
+    Android 9 (API 28) 起，系统默认禁止应用发起明文 HTTP 流量
+    （表现为 net::ERR_CLEARTEXT_NOT_PERMITTED）。
+
+  而心动（xd.com）这套页游体系全链路都是 HTTP：
+    http://www.xd.com/users/...            登录
+    http://api.xd.com/games/play?app=sxd   取游戏入口
+    http://s0.sxd.xd.com/login_api.php     进入游戏服的登录握手
+    http://uri.xdcdn.net/sxd/load/...      SWF 与资源加载
+    http://9x050.sxdweb.xd.com:8200        游戏 TCP 长连接
+  实测游戏服务器并未提供 HTTPS（443 端口 closed），
+  所以不放开明文流量就无法进入游戏。
+
+  注意：这同时也影响 WebView —— 页面本身是 http 时，
+  同样受此策略约束，因此浏览器外壳也必须放行。
+  =====================================================================
+-->
+<network-security-config>
+
+    <!-- 默认策略：放行明文流量，并信任系统证书链（用于 HTTPS 站点） -->
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <!-- 明确列出页游体系涉及的域名，语义更清晰、便于日后收紧 -->
+    <domain-config cleartextTrafficPermitted="true">
+        <!-- 心动主站与账号体系 -->
+        <domain includeSubdomains="true">xd.com</domain>
+        <!-- 静态资源 CDN（SWF、JS、图片） -->
+        <domain includeSubdomains="true">xdcdn.net</domain>
+        <!-- 游戏服务器集群，如 9x050.sxdweb.xd.com、s0.sxd.xd.com -->
+        <domain includeSubdomains="true">sxdweb.xd.com</domain>
+        <domain includeSubdomains="true">sxd.xd.com</domain>
+    </domain-config>
+
+</network-security-config>

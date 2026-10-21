@@ -1,0 +1,10 @@
+target/
+build/
+.gradle/
+.kotlin/
+local.properties
+app/build/
+.sxdffle-cache/
+*.apk
+# 预编译引擎库（由 cargo build 产出，不入库；源码包中仍会附带）
+app/src/main/jniLibs/*/*.so

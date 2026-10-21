@@ -1,0 +1,108 @@
+[package]
+# SXDffle —— 基于 Ruffle 引擎的 Android 原生 Flash 浏览器
+# 派生自 ruffle-android (MIT OR Apache-2.0)
+name = "sxdffle"
+version = "0.1.0"
+authors = [
+    "SXDffle contributors",
+    "Ruffle contributors <ruffle@ruffle.rs>",
+    "TÖRÖK Attila <torokati44@gmail.com>",
+    "Nathan Adams <dinnerbone@dinnerbone.com>",
+]
+edition = "2018"
+resolver = "2"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[profile.release]
+strip = "symbols"
+
+[dependencies]
+# 解析 JS → SWF 的 ExternalInterface 参数（Ruffle 已间接依赖，这里直接用）
+serde_json = "1"
+# 全局分配器：bionic/dlmalloc 在「海量小对象反复分配释放」下会保留大量空闲页，
+# 实测 GC 堆只有 167MB 时 RSS 已达 2GB。mimalloc 按 size-class 归还整页，
+# 专门针对这种模式。
+mimalloc = "0.1"
+# 需要直接调用 mi_collect 强制归还空闲页（mimalloc 不看 malloc_trim）
+libmimalloc-sys = { version = "0.1", features = ["extended"] }
+android-activity = { version = "0.6.1", features = ["game-activity"] }
+android_logger = "0.15.1"
+
+jni = "0.22.4"
+# reqwest (via ruffle_frontend_utils' `rustls-tls`) verifies certificates with this,
+# which on Android needs to be initialized, and its Kotlin component included.
+rustls-platform-verifier = "0.7.1"
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std"] }
+ndk = { version = "0.9.0", features = ["audio"] }
+
+# Have to follow Ruffle with this.
+wgpu = "30.0.1"
+
+# ---- 引擎层：指向本地 Ruffle 源码（离线构建，规避 github.com 不可达）----
+# 由 scripts/fetch-deps.sh 拉取，commit 与上游 ruffle-android 的 Cargo.lock 保持一致
+ruffle_common = { path = "../ruffle-mod/core/common" }
+ruffle_core = { path = "../ruffle-mod/core", features = [
+    "audio",
+    "symphonia",
+    "mp3",
+    "nellymoser",
+    "lzma",
+    "default_compatibility_rules",
+    "default_font",
+] }
+ruffle_render_wgpu = { path = "../ruffle-mod/render/wgpu" }
+ruffle_video_software = { path = "../ruffle-mod/video/software" }
+ruffle_frontend_utils = { path = "../ruffle-mod/frontend-utils", default-features = false, features = ["fs", "navigator", "rustls-tls"] }
+
+log = "0.4.32"
+
+# SXDffle：设备字体加载。中文页游大量使用设备字体（如 "Arial"），
+# 需要从 Android 系统字体目录查找；上游 ruffle-android 缺少这一层，
+# 会导致中文渲染成方块（见 src/ui.rs 顶部说明）。
+fontdb = "0.23"
+
+# Redirect tracing to log
+tracing = { version = "0.1.44", features = ["log", "log-always"] }
+backtrace = "0.3.76"
+async-task = "4.7.1"
+
+url = "2.5.2"
+webbrowser = "1.2.4"
+
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros"] }
+
+[features]
+jpegxr = ["ruffle_core/jpegxr"]
+
+# ---- 离线补丁：把 Ruffle 的 git 依赖重定向到本地副本 ----
+# 上游使用 git = "https://github.com/ruffle-rs/*"，在无法访问 github.com 的
+# 环境中必须本地化（由 scripts/fetch-deps.sh 拉取）。
+# 内测魔改版：本地 gc-arena（增加脚本执行中的可重入回收）
+[patch.crates-io]
+gc-arena = { path = "../gc-arena-sxd" }
+
+[patch."https://github.com/ruffle-rs/regras3"]
+regress = { path = "../vendor-crates/regras3" }
+
+[patch."https://github.com/ruffle-rs/jpegxr"]
+jpegxr = { path = "../vendor-crates/jpegxr" }
+
+[patch."https://github.com/ruffle-rs/nellymoser"]
+nellymoser-rs = { path = "../vendor-crates/nellymoser" }
+
+[patch."https://github.com/ruffle-rs/rust-flash-lso"]
+flash-lso = { path = "../vendor-crates/rust-flash-lso/flash-lso" }
+
+[patch."https://github.com/ruffle-rs/h263-rs"]
+h263-rs = { path = "../vendor-crates/h263-rs/h263" }
+h263-rs-yuv = { path = "../vendor-crates/h263-rs/yuv" }
+h263-rs-deblock = { path = "../vendor-crates/h263-rs/deblock" }
+
+[patch."https://github.com/ruffle-rs/nihav-vp6"]
+# 注意：`nihav-vp6` 是仓库名，其内部真实包名为下划线形式
+nihav_core = { path = "../vendor-crates/nihav-vp6/nihav-core" }
+nihav_codec_support = { path = "../vendor-crates/nihav-vp6/nihav-codec-support" }
+nihav_duck = { path = "../vendor-crates/nihav-vp6/nihav-duck" }

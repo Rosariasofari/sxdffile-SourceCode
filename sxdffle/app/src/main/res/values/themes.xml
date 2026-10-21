@@ -1,0 +1,24 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.Ruffle" parent="Theme.AppCompat.Light.DarkActionBar">
+    </style>
+
+    <!--
+      SXDffle 全屏 Flash 播放页。
+      GameActivity 在 surface 创建前显示的是 windowBackground，
+      用 Light 主题会闪一下白屏；这里固定黑底，与引擎首帧前的画面一致。
+    -->
+    <style name="Theme.Sxdffle.Player" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:colorBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+    </style>
+
+    <!-- SXDffle 浏览器：无 ActionBar、深色底，避免占用网页可视区域 -->
+    <style name="Theme.Sxdffle.NoActionBar" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">#FF1F1F1F</item>
+        <item name="android:navigationBarColor">#FF1F1F1F</item>
+    </style>
+</resources>

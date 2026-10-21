@@ -1,0 +1,32 @@
+# =====================================================================
+# SXDffle —— 交叉编译配置
+#
+# 注意：CC_aarch64-linux-android 这类变量名含 '-'，
+# zsh 与 bash 的 `export` 都会报 "not a valid identifier"。
+# 因此必须通过 Cargo 的 [env] 段注入这些变量，
+# 这样 cc / ring 等需要 C 编译器的构建脚本才能定位到 NDK 工具链。
+#
+# 若你的 NDK 不在下列路径，请修改 NDK_BIN 相关行，或改用
+# scripts/build-rust.sh（它会自动探测 NDK 位置）。
+# =====================================================================
+
+[target.aarch64-linux-android]
+linker = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+
+[target.armv7-linux-androideabi]
+linker = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi26-clang"
+
+[env]
+# ---- arm64-v8a ----
+"CC_aarch64-linux-android" = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+"CXX_aarch64-linux-android" = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang++"
+"AR_aarch64-linux-android" = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+"RANLIB_aarch64-linux-android" = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+"CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER" = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
+
+# ---- armeabi-v7a ----
+"CC_armv7-linux-androideabi" = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi26-clang"
+"CXX_armv7-linux-androideabi" = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi26-clang++"
+"AR_armv7-linux-androideabi" = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar"
+"RANLIB_armv7-linux-androideabi" = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ranlib"
+"CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER" = "/opt/android-ndk/android-ndk-r27c/toolchains/llvm/prebuilt/linux-x86_64/bin/armv7a-linux-androideabi26-clang"
