@@ -20,6 +20,18 @@ pub fn live_string_stats() -> (usize, usize) {
     )
 }
 
+/// 窄串是否纯 ASCII（UTF-8 下「每字节 < 0x80」等价于「每字符一字节」）。
+#[inline]
+fn right_is_ascii(s: &WStr) -> bool {
+    if s.is_wide() {
+        return false;
+    }
+    let bytes = unsafe {
+        std::slice::from_raw_parts(s as *const WStr as *const () as *const u8, s.len())
+    };
+    bytes.iter().all(|b| *b < 0x80)
+}
+
 /// Internal representation of `AvmAtom`s and (owned) `AvmString`s.
 ///
 /// Using this type directly is dangerous, as it can be used to violate
@@ -96,9 +108,22 @@ impl<'gc> AvmStringRepr<'gc> {
     }
 
     pub fn try_append_inline(left: Gc<'gc, Self>, right: &WStr) -> Option<Self> {
-        // note: we could also in-place append a byte string to a wide string
-        // But it was skipped for now.
-        if left.is_wide() != right.is_wide() {
+        // SXDffle 0.261123：允许「宽缓冲 ← 窄 ASCII」原地追加。
+        //
+        // 这是战报峰值里 2.2GB 字符串缓冲的直接来源：中文日志用 `s += 数字`
+        // 拼起来时，左边是宽串（UTF-16）、右边是窄串（UTF-8），原来的实现
+        // 因为宽窄不一致直接 return None，于是**每一次 `+=` 都要新建一整块
+        // 按当前长度分配的缓冲**。一帧内几十万次拼接，旧缓冲又要等帧结束才 GC，
+        // 峰值就被顶到 6~7GB。
+        //
+        // 窄串是 UTF-8：只有纯 ASCII（每个字节 < 0x80）才能无损地一字节对一字符
+        // 摊成 u16；含多字节字符时仍走原来的复制路径。
+        let width_mismatch = left.is_wide() != right.is_wide();
+        let narrow_to_wide = width_mismatch && left.is_wide();
+        if width_mismatch && !narrow_to_wide {
+            return None;
+        }
+        if narrow_to_wide && !right_is_ascii(right) {
             return None;
         }
 
@@ -143,7 +168,19 @@ impl<'gc> AvmStringRepr<'gc> {
             if chars_available >= right.len() {
                 let first_available = first_available as *mut u8;
                 let right_ptr = right as *const WStr as *const () as *const u8;
-                std::ptr::copy_nonoverlapping(right_ptr, first_available, char_size * right.len());
+                if narrow_to_wide {
+                    // 逐字节摊成 u16（目标缓冲是宽的，char_size == 2）
+                    let dst = first_available as *mut u16;
+                    for i in 0..right.len() {
+                        *dst.add(i) = *right_ptr.add(i) as u16;
+                    }
+                } else {
+                    std::ptr::copy_nonoverlapping(
+                        right_ptr,
+                        first_available,
+                        char_size * right.len(),
+                    );
+                }
 
                 let new_chars_used: usize = left_origin.chars_used.get() as usize + right.len();
                 if new_chars_used >= u32::MAX as usize {

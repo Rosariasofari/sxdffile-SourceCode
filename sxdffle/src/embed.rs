@@ -1984,12 +1984,23 @@ fn render_thread(
                     let (t, _total) = crate::alloc_tag_stats();
                     let mut parts = Vec::new();
                     for (i, b) in t.iter().enumerate() {
+                        // GC slab 不走标签表：块被整块归还时标签扣不准
+                        // （实测记成实际存活的两倍），统一改用 gc_slab_bytes()。
+                        if i == 12 {
+                            continue;
+                        }
                         if *b >= 8 * 1024 * 1024 {
                             parts.push(format!(
                                 "{} {}MB",
                                 crate::TAG_LABELS[i],
                                 b / (1024 * 1024)
                             ));
+                        }
+                    }
+                    {
+                        let live = ruffle_core::Player::gc_slab_bytes() / (1024 * 1024);
+                        if live > 0 {
+                            parts.push(format!("GC slab {}MB（存活）", live));
                         }
                     }
                     if !parts.is_empty() {
