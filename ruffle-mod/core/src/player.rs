@@ -2065,6 +2065,8 @@ impl Player {
 
     #[instrument(level = "debug", skip_all)]
     pub fn run_frame(&mut self) {
+        // SXDffle：帧计时（独立线程据此判断"主线程卡在这一帧多久了"）
+        let _sxd_frame_timer = crate::sxd_watch::FrameTimer::new();
         let frame_time = self.frame_time(750_000_000.0);
         let frame_time = Duration::from_nanos(frame_time as u64);
         let (mut execution_limit, may_execute_while_streaming) = match self.load_behavior {
@@ -2554,6 +2556,11 @@ impl Player {
         gc_arena::slab_bytes()
     }
 
+    /// SXDffle：(slab 峰值, 已归还系统)。
+    pub fn gc_slab_reclaim_stats() -> (usize, usize) {
+        gc_arena::slab_reclaim_stats()
+    }
+
     pub fn gc_stats(&self) -> (usize, f64) {
         match self.gc_arena.try_borrow() {
             Ok(arena) => {
@@ -2931,6 +2938,9 @@ impl PlayerBuilder {
     /// can be changed by chaining the configuration methods.
     #[inline]
     pub fn new() -> Self {
+        // SXDffle：让 gc-arena 在申请 slab 时回调我们，把 1MB slab 单列成
+        // 「GC slab」标签，而不是混进当前执行阶段（AS3执行）。
+        crate::alloc_tag::install_slab_hook();
         Self {
             movie: None,
 

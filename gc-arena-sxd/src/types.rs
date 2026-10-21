@@ -139,6 +139,28 @@ static SLABS: SlabTable =
 
 static SLAB_LOCK: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
+// SXDffle：告诉宿主分配器「这次 malloc 是 GC slab 自己要的」。
+//
+// 不标的话，slab 会按当时的执行阶段被打上 `AS3执行` 的标签，
+// 于是一份 700MB 的 GC 堆会算进「AS3 大块」里，把归因彻底带偏
+// （0.261120 那 2GB「AS3执行」里有 700MB 其实是 slab 本身）。
+//
+// gc-arena 是 no_std，用不了 `thread_local!`；而全局原子标记会让**同窗口内
+// 其它线程**的分配被误标（战报期间 SWF 解压正在别的线程跑，一个 36MB 的块
+// 被记成 slab 就毁了整张表）。所以这里只留一个函数指针，由宿主注入
+// 它自己的线程局部标记。
+pub static SLAB_HOOK: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+
+#[inline]
+fn slab_hook(enter: bool) {
+    let f = SLAB_HOOK.load(core::sync::atomic::Ordering::Relaxed);
+    if f != 0 {
+        // SAFETY: 由宿主用 `install_slab_hook` 写入，签名固定为 `fn(bool)`。
+        let f: fn(bool) = unsafe { core::mem::transmute::<usize, fn(bool)>(f) };
+        f(enter);
+    }
+}
+
 #[inline]
 fn slab_lock() {
     use core::sync::atomic::Ordering;
@@ -156,6 +178,42 @@ fn slab_unlock() {
 }
 
 /// 小对象走 slab，大对象/超对齐仍交给系统分配器。
+///
+/// SXDffle 0.261121：**整块归还**。
+///
+/// 之前 slab 只从系统要、从不还，于是「884 万个临时对象」那一瞬间要来的
+/// 700MB，在 GC 把它们全收走之后仍然挂在进程上 —— 这就是退回宗门后
+/// 4.19GB 一分不降里最不可解释的那一块。
+///
+/// 做法：slab 一律 1MB 对齐，头部 64B 存 `live` 计数；某块被释放后
+/// `live` 归零，说明这一整块 1MB 已经没有活对象，把它从空闲链里摘干净
+/// 再还给系统。战报的对象是顺序 bump 出来的（先来的常驻、后到的都是
+/// 临时数据），所以「整块变空」不是巧合，而是常态。
+const SLAB_HDR: usize = 64;
+const SLAB_MAGIC: u32 = 0x5344_534C; // "SDSL"
+
+#[repr(C)]
+struct SlabHdr {
+    magic: u32,
+    class: u32,
+    live: u32,
+    _pad: u32,
+    /// 系统分配器给的原始地址（我们为了做地址对齐多要了 1MB）
+    raw: usize,
+}
+
+#[inline]
+fn hdr_of(ptr: *mut u8) -> *mut SlabHdr {
+    (ptr as usize & !(SLAB_BYTES - 1)) as *mut SlabHdr
+}
+
+/// 多要 1MB 再做手工对齐：不依赖分配器支不支持 1MB 对齐。
+/// 多出来的那半段不会被写，所以不占物理页。
+#[inline]
+unsafe fn slab_layout() -> Layout {
+    unsafe { Layout::from_size_align_unchecked(SLAB_BYTES * 2, CLASS_STEP) }
+}
+
 #[inline]
 unsafe fn gc_alloc(layout: Layout) -> *mut u8 {
     let size = layout.size();
@@ -169,31 +227,72 @@ unsafe fn gc_alloc(layout: Layout) -> *mut u8 {
     let slab = unsafe { &mut (*SLABS.0.get())[idx] };
     if !slab.free.is_null() {
         let p = slab.free;
-        unsafe { slab.free = *(p as *mut *mut u8) };
+        unsafe {
+            slab.free = *(p as *mut *mut u8);
+            (*hdr_of(p)).live += 1;
+        }
         slab_unlock();
         return p;
     }
     if slab.bump.is_null() || unsafe { slab.bump.add(block) } > slab.end {
-        // 每个 slab 至少要装 64 个块，避免大 class 上的极端浪费
-        let want = if block * 64 > SLAB_BYTES {
-            block * 64
-        } else {
-            SLAB_BYTES
-        };
-        let slab_layout = unsafe { Layout::from_size_align_unchecked(want, CLASS_STEP) };
-        let base = unsafe { alloc::alloc(slab_layout) };
-        if base.is_null() {
+        let sl = unsafe { slab_layout() };
+        slab_hook(true);
+        let raw = unsafe { alloc::alloc(sl) };
+        slab_hook(false);
+        if raw.is_null() {
             slab_unlock();
-            unsafe { alloc::handle_alloc_error(slab_layout) };
+            unsafe { alloc::handle_alloc_error(sl) };
         }
-        SLAB_TOTAL.fetch_add(want, Ordering::Relaxed);
-        slab.bump = base;
-        slab.end = unsafe { base.add(want) };
+        let base =
+            ((raw as usize + SLAB_BYTES - 1) & !(SLAB_BYTES - 1)) as *mut u8;
+        unsafe {
+            let h = base as *mut SlabHdr;
+            (*h).magic = SLAB_MAGIC;
+            (*h).class = idx as u32;
+            (*h).live = 0;
+            (*h)._pad = 0;
+            (*h).raw = raw as usize;
+        }
+        SLAB_TOTAL.fetch_add(SLAB_BYTES, Ordering::Relaxed);
+        SLAB_LIVE.fetch_add(SLAB_BYTES, Ordering::Relaxed);
+        slab.bump = unsafe { base.add(SLAB_HDR) };
+        slab.end = unsafe { base.add(SLAB_BYTES) };
     }
     let p = slab.bump;
     slab.bump = unsafe { slab.bump.add(block) };
+    unsafe { (*hdr_of(p)).live += 1 };
     slab_unlock();
     p
+}
+
+/// 把一整块已经空了的 slab 从本 class 的空闲链里摘掉并还给系统。
+///
+/// 必须是「先摘链、后 free」：空闲链的 next 指针就写在块自己的前 8 字节里。
+#[inline]
+unsafe fn reclaim_slab(slab: &mut SlabClass, hdr: *mut SlabHdr) {
+    let lo = hdr as usize;
+    let hi = lo + SLAB_BYTES;
+    let mut prev: *mut *mut u8 = &mut slab.free;
+    let mut cur = slab.free;
+    while !cur.is_null() {
+        let a = cur as usize;
+        let next = unsafe { *(cur as *mut *mut u8) };
+        if a >= lo && a < hi {
+            unsafe { *prev = next };
+        } else {
+            prev = cur as *mut *mut u8;
+        }
+        cur = next;
+    }
+    // bump 指在这块上且已经用尽，可以顺手复位
+    if !slab.bump.is_null() && (slab.bump as usize & !(SLAB_BYTES - 1)) == lo {
+        slab.bump = core::ptr::null_mut();
+        slab.end = core::ptr::null_mut();
+    }
+    SLAB_LIVE.fetch_sub(SLAB_BYTES, Ordering::Relaxed);
+    SLAB_RECLAIMED.fetch_add(SLAB_BYTES, Ordering::Relaxed);
+    let raw = unsafe { (*hdr).raw } as *mut u8;
+    unsafe { alloc::dealloc(raw, slab_layout()) };
 }
 
 #[inline]
@@ -209,15 +308,43 @@ unsafe fn gc_dealloc(ptr: *mut u8, layout: Layout) {
     let slab = unsafe { &mut (*SLABS.0.get())[idx] };
     unsafe { *(ptr as *mut *mut u8) = slab.free };
     slab.free = ptr;
+
+    let hdr = hdr_of(ptr);
+    let h = unsafe { &mut *hdr };
+    if unsafe { h.magic } == SLAB_MAGIC {
+        h.live = h.live.saturating_sub(1);
+        if h.live == 0 {
+            // 当前 bump 块如果还有余量，留着继续用，别来回申请
+            let in_bump = !slab.bump.is_null()
+                && (slab.bump as usize & !(SLAB_BYTES - 1)) == hdr as usize;
+            if !in_bump || slab.bump >= slab.end {
+                unsafe { reclaim_slab(slab, hdr) };
+            }
+        }
+    }
     slab_unlock();
 }
 
 /// SXDffle：slab 从系统拿到过多少字节（只增不减，用于观察峰值）。
 static SLAB_TOTAL: AtomicUsize = AtomicUsize::new(0);
+/// 当前仍挂在进程上的 slab 字节。
+static SLAB_LIVE: AtomicUsize = AtomicUsize::new(0);
+/// 累计归还给系统的 slab 字节。
+static SLAB_RECLAIMED: AtomicUsize = AtomicUsize::new(0);
 
+/// 当前 slab 占用（活着的 1MB 块合计）。
 pub fn slab_bytes() -> usize {
-    SLAB_TOTAL.load(Ordering::Relaxed)
+    SLAB_LIVE.load(Ordering::Relaxed)
 }
+
+/// (峰值, 已归还)：用来判断「GC 收完之后到底还给系统多少」。
+pub fn slab_reclaim_stats() -> (usize, usize) {
+    (
+        SLAB_TOTAL.load(Ordering::Relaxed),
+        SLAB_RECLAIMED.load(Ordering::Relaxed),
+    )
+}
+
 
 /// A thin-pointer-sized pointer to a type-erased GC object.
 ///

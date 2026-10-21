@@ -73,3 +73,17 @@ pub fn variant_name(debug: &str) -> &str {
         .unwrap_or(debug.len());
     &debug[..end]
 }
+
+/// 只读快照：按累计耗时降序取前 `n` 项，**不清零**。
+///
+/// 慢帧看门狗要的是「卡住的这一秒里，时间花在哪条指令上」，
+/// 而 15 秒的常规统计是累计值，会把这些细节平均掉。
+pub fn snapshot_top(n: usize) -> Vec<(String, u64, u64)> {
+    COUNTS.with(|c| {
+        let v = c.borrow();
+        let mut out: Vec<(String, u64, u64)> = v.clone();
+        out.sort_by(|a, b| b.2.cmp(&a.2));
+        out.truncate(n);
+        out
+    })
+}

@@ -1,0 +1,18 @@
+num_ticks = 1
+
+# FIXME: Ruffle doesn't do a good job at antialiasing here.
+
+[[image_comparisons.output.checks]]
+tolerance = 2
+max_outliers = 3300
+
+[[image_comparisons.output.checks]]
+tolerance = 64
+max_outliers = 280
+
+[[image_comparisons.output.checks]]
+tolerance = 180
+max_outliers = 0
+
+[player_options]
+with_renderer = { optional = false, quality = "high" }

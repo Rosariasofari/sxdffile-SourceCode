@@ -65,10 +65,11 @@ static BUCKET_COUNTS: [std::sync::atomic::AtomicUsize; ALLOC_BUCKETS] = [
 //
 // 表操作是线性扫描（8192 项），但大块分配次数很少（一次运行几千次），
 // 而且全程不分配、不加锁，放在 allocator 里是安全的。
-const TAG_COUNT: usize = 12;
+const TAG_COUNT: usize = 13;
 
 /// 每个阶段「此刻存活的 ≥64KB 字节」。由块头里的 tag 精确增减（见 BigHeader）。
 static TAG_BYTES: [std::sync::atomic::AtomicUsize; TAG_COUNT] = [
+    std::sync::atomic::AtomicUsize::new(0),
     std::sync::atomic::AtomicUsize::new(0),
     std::sync::atomic::AtomicUsize::new(0),
     std::sync::atomic::AtomicUsize::new(0),
@@ -179,6 +180,7 @@ pub const TAG_LABELS: [&str; TAG_COUNT] = [
     "AS3位图",
     "AS3字节流",
     "AS3字串",
+    "GC slab",
 ];
 
 pub const ALLOC_BUCKET_LABELS: [&str; ALLOC_BUCKETS] = [

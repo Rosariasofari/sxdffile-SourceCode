@@ -131,10 +131,87 @@ fn ensure_mem_monitor() {
             .spawn(|| {
                 let mut last_mb = 0u64;
                 let mut tick = 0u64;
+                const TICK_MS: u64 = 500;
                 loop {
-                    std::thread::sleep(Duration::from_secs(2));
+                    std::thread::sleep(Duration::from_millis(TICK_MS));
                     let mb = rss_mb();
-                    if mb.abs_diff(last_mb) >= 30 {
+
+                    // ---- 慢帧看门狗 ----
+                    //
+                    // 0.261120 的致命帧：主线程卡 8 秒、分配 2000 万对象、
+                    // RSS 2.2GB → 7.1GB 被杀。而所有采样都挂在渲染循环里，
+                    // 那一刻全部停摆，日志里只剩两条「独立采样」。
+                    // 这里从独立线程读「本帧跑了多久」，一超阈值就把现场摊开。
+                    if let Some(ms) = ruffle_core::sxd_watch::frame_elapsed_ms() {
+                        if ms >= 1500 && tick % 2 == 0 {
+                            let (alloc, freed, objs) = ruffle_core::heap_byte_stats_global();
+                            let _ = (alloc, freed);
+                            let stats = crate::alloc_bucket_stats();
+                            let total: usize = stats.iter().map(|(b, _)| *b).sum();
+                            let mut big = 0usize;
+                            let mut big_n = 0usize;
+                            let mut rest = 0usize;
+                            let mut rest_n = 0usize;
+                            for (i, (bytes, count)) in stats.iter().enumerate() {
+                                if i >= 6 {
+                                    big += *bytes;
+                                    big_n += *count;
+                                } else {
+                                    rest += *bytes;
+                                    rest_n += *count;
+                                }
+                            }
+                            let (swf_n, _swf_c, swf_raw) = ruffle_core::swf_load_stats();
+                            let (tags, _tag_total) = crate::alloc_tag_stats();
+                            let mut tparts: Vec<String> = Vec::new();
+                            for (i, b) in tags.iter().enumerate() {
+                                if *b >= 32 * 1024 * 1024 {
+                                    tparts.push(format!(
+                                        "{} {}MB",
+                                        crate::TAG_LABELS[i],
+                                        b / (1024 * 1024)
+                                    ));
+                                }
+                            }
+                            let mut msg = format!(
+                                "SXDffle 慢帧 {}ms · RSS {}MB · 档位合计 {}MB（≥64K {}块/{}MB · <64K {}块/{}MB）· slab {}MB · GC {}万对象 · SWF {}部/{}MB",
+                                ms,
+                                mb,
+                                total / (1024 * 1024),
+                                big_n,
+                                big / (1024 * 1024),
+                                rest_n,
+                                rest / (1024 * 1024),
+                                ruffle_core::Player::gc_slab_bytes() / (1024 * 1024),
+                                objs / 10000,
+                                swf_n,
+                                swf_raw / (1024 * 1024)
+                            );
+                            if !tparts.is_empty() {
+                                msg.push_str(&format!(" · 归属 {}", tparts.join(" ")));
+                            }
+                            log::warn!("{msg}");
+
+                            if let Some(snap) = ruffle_core::sxd_watch::peek_slow() {
+                                let top: Vec<String> = snap
+                                    .top_ops
+                                    .iter()
+                                    .map(|(n, c, us)| {
+                                        format!("{}({}次/{}ms)", n, c, us / 1000)
+                                    })
+                                    .collect();
+                                log::warn!(
+                                    "SXDffle 慢帧现场 · 方法 {} · 指令 {} · 耗时TOP {}",
+                                    snap.method,
+                                    snap.opcode,
+                                    top.join(" · ")
+                                );
+                                ruffle_core::sxd_watch::clear_slow();
+                            }
+                        }
+                    }
+
+                    if tick % 4 == 0 && mb.abs_diff(last_mb) >= 30 {
                         // GC 堆字节是 atomic 累加，不需要 Player 锁 ——
                         // 战报解析期间渲染线程被占死时，这里依然读得到。
                         let (alloc, freed, objs) = ruffle_core::heap_byte_stats_global();
@@ -147,9 +224,9 @@ fn ensure_mem_monitor() {
                         );
                         last_mb = mb;
                     }
-                    // 每 10 秒打一次映射排行：战报期间也能看到"谁在涨"
+                    // 每 20 秒（40 个 500ms）打一次映射排行：战报期间也能看到"谁在涨"
                     tick += 1;
-                    if tick % 5 == 0 && mb > 800 {
+                    if tick % 40 == 0 && mb > 800 {
                         let top = mem_top_mappings(6);
                         let line: Vec<String> = top
                             .iter()
@@ -1834,8 +1911,10 @@ fn render_thread(
                     0
                 };
                 log::info!(
-                    "SXDffle embed: GC slab {}MB（GcBox 实际占用）",
-                    ruffle_core::Player::gc_slab_bytes() / (1024 * 1024)
+                    "SXDffle embed: GC slab {}MB（存活；已归还 {}MB，峰值 {}MB）",
+                    ruffle_core::Player::gc_slab_bytes() / (1024 * 1024),
+                    ruffle_core::Player::gc_slab_reclaim_stats().1 / (1024 * 1024),
+                    ruffle_core::Player::gc_slab_reclaim_stats().0 / (1024 * 1024)
                 );
                 log::info!(
                     "SXDffle embed: GC 堆 存活 {}MB（对象 {} 个 · 平均 {}B）· 累计分配 {}MB / 释放 {}MB",

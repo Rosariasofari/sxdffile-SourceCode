@@ -1,0 +1,630 @@
+/// Constructors
+// new Rectangle()
+(top=0, right=0, bottom=0, left=0, topLeft=(x=0, y=0), bottomRight=(x=0, y=0), width=0, height=0, size=(x=0, y=0), x=0, y=0)
+
+// new Rectangle(1)
+(top=undefined, right=NaN, bottom=NaN, left=1, topLeft=(x=1, y=undefined), bottomRight=(x=NaN, y=NaN), width=undefined, height=undefined, size=(x=undefined, y=undefined), x=1, y=undefined)
+
+// new Rectangle(1, 2, 3, 4)
+(top=2, right=4, bottom=6, left=1, topLeft=(x=1, y=2), bottomRight=(x=4, y=6), width=3, height=4, size=(x=3, y=4), x=1, y=2)
+
+// new Rectangle('1', '2', '3', '4')
+(top=2, right=13, bottom=24, left=1, topLeft=(x=1, y=2), bottomRight=(x=13, y=24), width=3, height=4, size=(x=3, y=4), x=1, y=2)
+
+
+/// Property enumeration order
+// new Rectangle()
+toString equals union intersects intersection containsRectangle containsPoint contains offsetPoint offset inflatePoint inflate size bottomRight topLeft bottom top right left isEmpty setEmpty clone x y width height 
+
+// new Rectangle(1, 2, 3, 4)
+toString equals union intersects intersection containsRectangle containsPoint contains offsetPoint offset inflatePoint inflate size bottomRight topLeft bottom top right left isEmpty setEmpty clone height width y x 
+
+// new Rectangle(1, 2, 3, 4) after setEmpty()
+toString equals union intersects intersection containsRectangle containsPoint contains offsetPoint offset inflatePoint inflate size bottomRight topLeft bottom top right left isEmpty setEmpty clone height width y x 
+
+// new Rectangle(1, 2, 3, 4).clone()
+toString equals union intersects intersection containsRectangle containsPoint contains offsetPoint offset inflatePoint inflate size bottomRight topLeft bottom top right left isEmpty setEmpty clone height width y x 
+
+// new Rectangle(1, 2, 3, 4).intersection(new Rectangle(2, 3, 4, 5))
+toString equals union intersects intersection containsRectangle containsPoint contains offsetPoint offset inflatePoint inflate size bottomRight topLeft bottom top right left isEmpty setEmpty clone x y width height 
+
+// new Rectangle(1, 2, 3, 4).union(new Rectangle(2, 3, 4, 5))
+toString equals union intersects intersection containsRectangle containsPoint contains offsetPoint offset inflatePoint inflate size bottomRight topLeft bottom top right left isEmpty setEmpty clone x y width height 
+
+// Rectangle.prototype
+toString equals union intersects intersection containsRectangle containsPoint contains offsetPoint offset inflatePoint inflate size bottomRight topLeft bottom top right left isEmpty setEmpty clone 
+
+
+/// top
+// rect.top = -200
+(top=-200, right=6, bottom=10, left=1, topLeft=(x=1, y=-200), bottomRight=(x=6, y=10), width=5, height=210, size=(x=5, y=210), x=1, y=-200)
+
+// rect.top = NaN
+(top=NaN, right=6, bottom=NaN, left=1, topLeft=(x=1, y=NaN), bottomRight=(x=6, y=NaN), width=5, height=NaN, size=(x=5, y=NaN), x=1, y=NaN)
+
+// rect.top = undefined
+(top=undefined, right=6, bottom=NaN, left=1, topLeft=(x=1, y=undefined), bottomRight=(x=6, y=NaN), width=5, height=NaN, size=(x=5, y=NaN), x=1, y=undefined)
+
+
+/// right
+// rect.right = -200
+(top=3, right=-200, bottom=10, left=1, topLeft=(x=1, y=3), bottomRight=(x=-200, y=10), width=-201, height=7, size=(x=-201, y=7), x=1, y=3)
+
+// rect.right = NaN
+(top=3, right=NaN, bottom=10, left=1, topLeft=(x=1, y=3), bottomRight=(x=NaN, y=10), width=NaN, height=7, size=(x=NaN, y=7), x=1, y=3)
+
+// rect.right = undefined
+(top=3, right=NaN, bottom=10, left=1, topLeft=(x=1, y=3), bottomRight=(x=NaN, y=10), width=NaN, height=7, size=(x=NaN, y=7), x=1, y=3)
+
+
+/// left
+// rect.left = -200
+(top=3, right=6, bottom=10, left=-200, topLeft=(x=-200, y=3), bottomRight=(x=6, y=10), width=206, height=7, size=(x=206, y=7), x=-200, y=3)
+
+// rect.left = NaN
+(top=3, right=NaN, bottom=10, left=NaN, topLeft=(x=NaN, y=3), bottomRight=(x=NaN, y=10), width=NaN, height=7, size=(x=NaN, y=7), x=NaN, y=3)
+
+// rect.left = undefined
+(top=3, right=NaN, bottom=10, left=undefined, topLeft=(x=undefined, y=3), bottomRight=(x=NaN, y=10), width=NaN, height=7, size=(x=NaN, y=7), x=undefined, y=3)
+
+
+/// bottom
+// rect.bottom = -200
+(top=3, right=6, bottom=-200, left=1, topLeft=(x=1, y=3), bottomRight=(x=6, y=-200), width=5, height=-203, size=(x=5, y=-203), x=1, y=3)
+
+// rect.bottom = NaN
+(top=3, right=6, bottom=NaN, left=1, topLeft=(x=1, y=3), bottomRight=(x=6, y=NaN), width=5, height=NaN, size=(x=5, y=NaN), x=1, y=3)
+
+// rect.bottom = undefined
+(top=3, right=6, bottom=NaN, left=1, topLeft=(x=1, y=3), bottomRight=(x=6, y=NaN), width=5, height=NaN, size=(x=5, y=NaN), x=1, y=3)
+
+
+/// topLeft
+// rect.topLeft = new Point(-100, -200)
+(top=-200, right=6, bottom=10, left=-100, topLeft=(x=-100, y=-200), bottomRight=(x=6, y=10), width=106, height=210, size=(x=106, y=210), x=-100, y=-200)
+
+// rect.topLeft = {x: '1', y: '2'}
+(top=2, right=15, bottom=28, left=1, topLeft=(x=1, y=2), bottomRight=(x=15, y=28), width=5, height=8, size=(x=5, y=8), x=1, y=2)
+
+// rect.topLeft = undefined
+(top=undefined, right=NaN, bottom=NaN, left=undefined, topLeft=(x=undefined, y=undefined), bottomRight=(x=NaN, y=NaN), width=NaN, height=NaN, size=(x=NaN, y=NaN), x=undefined, y=undefined)
+
+
+/// bottomRight
+// rect.bottomRight = new Point(-100, -200)
+(top=3, right=-100, bottom=-200, left=1, topLeft=(x=1, y=3), bottomRight=(x=-100, y=-200), width=-101, height=-203, size=(x=-101, y=-203), x=1, y=3)
+
+// rect.bottomRight = {x: '1', y: '2'}
+(top=3, right=1, bottom=2, left=1, topLeft=(x=1, y=3), bottomRight=(x=1, y=2), width=0, height=-1, size=(x=0, y=-1), x=1, y=3)
+
+// rect.bottomRight = undefined
+(top=3, right=NaN, bottom=NaN, left=1, topLeft=(x=1, y=3), bottomRight=(x=NaN, y=NaN), width=NaN, height=NaN, size=(x=NaN, y=NaN), x=1, y=3)
+
+
+/// size
+// rect.size = new Point(-100, -200)
+(top=3, right=-99, bottom=-197, left=1, topLeft=(x=1, y=3), bottomRight=(x=-99, y=-197), width=-100, height=-200, size=(x=-100, y=-200), x=1, y=3)
+
+// rect.size = {x: '1', y: '2'}
+(top=3, right=11, bottom=32, left=1, topLeft=(x=1, y=3), bottomRight=(x=11, y=32), width=1, height=2, size=(x=1, y=2), x=1, y=3)
+
+// rect.size = undefined
+(top=3, right=NaN, bottom=NaN, left=1, topLeft=(x=1, y=3), bottomRight=(x=NaN, y=NaN), width=undefined, height=undefined, size=(x=undefined, y=undefined), x=1, y=3)
+
+
+/// Point getters return fresh objects
+// rect.topLeft === rect.topLeft
+false
+
+// rect.topLeft = point; point.x = 100
+(top=20, right=6, bottom=10, left=10, topLeft=(x=10, y=20), bottomRight=(x=6, y=10), width=-4, height=-10, size=(x=-4, y=-10), x=10, y=20)
+
+
+/// Getters: property access order
+// self.right
+  get self.x
+  get self.width
+6
+
+// self.bottomRight
+  get self.y
+  get self.height
+  get self.x
+  get self.width
+(x=6, y=10)
+
+// self.topLeft
+  get self.y
+  get self.x
+(x=1, y=3)
+
+// self.size
+  get self.height
+  get self.width
+(x=5, y=7)
+
+
+/// Setters: property access order
+// self.left = 0
+  get self.width
+  get self.x
+  set self.width = 6
+  set self.x = 0
+
+// self.right = 0
+  get self.x
+  set self.width = -1
+
+// self.topLeft = other
+  get self.width
+  get self.x
+  get other.x
+  set self.width = -4
+  get self.height
+  get self.y
+  get other.y
+  set self.height = -10
+  get other.x
+  set self.x = 10
+  get other.y
+  set self.y = 20
+
+// self.bottomRight = other
+  get other.x
+  get self.x
+  set self.width = 9
+  get other.y
+  get self.y
+  set self.height = 17
+
+// self.size = other
+  get other.x
+  set self.width = 10
+  get other.y
+  set self.height = 20
+
+
+/// clone
+// rect.clone() === rect
+false
+
+// Rectangle.prototype.clone.call({x: 1, y: 2, width: 3, height: 4})
+(x=1, y=2, w=3, h=4)
+true
+
+// self.clone()
+  get self.height
+  get self.width
+  get self.y
+  get self.x
+(x=1, y=3, w=5, h=7)
+
+
+/// equals
+// rect.equals(new Rectangle(1, 3, 5, 7))
+true
+
+// rect.equals(new Rectangle('1', '3', '5', '7'))
+true
+
+// rect.equals({x: 1, y: 3, width: 5, height: 7})
+false
+
+// rect.equals({x: 1, y: 3, width: 5, height: 7, __proto__: Rectangle.prototype})
+true
+
+// Rectangle.prototype.equals.call({x: 1, y: 3, width: 5, height: 7}, rect)
+true
+
+
+/// equals: property access order
+// self.equals(other), all equal
+  get other.x
+  get self.x
+  get other.y
+  get self.y
+  get other.width
+  get self.width
+  get other.height
+  get self.height
+true
+
+// self.equals(other), other is a plain object
+false
+
+
+/// isEmpty
+// new Rectangle(1, 2, 3, 4).isEmpty()
+false
+
+// new Rectangle(1, 2, 3, 0).isEmpty()
+true
+
+// new Rectangle(1, 2, 0, 4).isEmpty()
+true
+
+// new Rectangle(1, 2, NaN, 4).isEmpty()
+true
+
+// new Rectangle(1, 2, '3', '4').isEmpty()
+false
+
+// self.isEmpty()
+  get self.width
+  get self.height
+false
+
+
+/// setEmpty
+// rect.setEmpty()
+undefined
+(top=0, right=0, bottom=0, left=0, topLeft=(x=0, y=0), bottomRight=(x=0, y=0), width=0, height=0, size=(x=0, y=0), x=0, y=0)
+
+// self.setEmpty()
+  set self.height = 0
+  set self.width = 0
+  set self.y = 0
+  set self.x = 0
+
+
+/// contains
+// rect.contains()
+undefined
+
+// rect.contains(1, 3)
+true
+
+// rect.contains(6, 10)
+false
+
+// rect.contains(4, NaN)
+undefined
+
+// rect.contains('3', '5')
+true
+
+
+/// contains: property access order
+// self.contains(3, 5), inside
+  get self.x
+  get self.x
+  get self.width
+  get self.y
+  get self.y
+  get self.height
+true
+
+// self.contains(0, 5), left of x
+  get self.x
+false
+
+// self.contains(NaN, 5)
+  get self.x
+  get self.x
+  get self.width
+undefined
+
+
+/// containsPoint
+// rect.containsPoint()
+undefined
+
+// rect.containsPoint(new Point(1, 3))
+true
+
+// rect.containsPoint(new Point(6, 10))
+false
+
+// rect.containsPoint({x: 2, y: 5})
+true
+
+// self.containsPoint(other)
+  get other.x
+  get self.x
+  get other.x
+  get self.x
+  get self.width
+  get other.y
+  get self.y
+  get other.y
+  get self.y
+  get self.height
+true
+
+
+/// containsRectangle
+// rect.containsRectangle()
+undefined
+
+// rect.containsRectangle(rect)
+true
+
+// rect.containsRectangle(new Rectangle(1, 3, 5.1, 7.1))
+false
+
+// rect.containsRectangle(new Rectangle(2, undefined, 1, 1))
+undefined
+
+// self.containsRectangle(other)
+  get other.x
+  get other.width
+  get other.y
+  get other.height
+  get self.x
+  get self.width
+  get self.y
+  get self.height
+  get other.x
+  get self.x
+  get other.x
+  get other.y
+  get self.y
+  get other.y
+  get self.x
+  get self.y
+true
+
+
+/// inflate
+// rect.inflate()
+undefined
+(top=NaN, right=NaN, bottom=NaN, left=NaN, topLeft=(x=NaN, y=NaN), bottomRight=(x=NaN, y=NaN), width=NaN, height=NaN, size=(x=NaN, y=NaN), x=NaN, y=NaN)
+
+// rect.inflate(1, 2)
+(top=1, right=7, bottom=12, left=0, topLeft=(x=0, y=1), bottomRight=(x=7, y=12), width=7, height=11, size=(x=7, y=11), x=0, y=1)
+
+// rect.inflate('1', '2')
+(top=1, right=7, bottom=12, left=0, topLeft=(x=0, y=1), bottomRight=(x=7, y=12), width=7, height=11, size=(x=7, y=11), x=0, y=1)
+
+// self.inflate(dx, dy) with valueOf
+  get self.x
+  valueOf dx
+  set self.x = -9
+  get self.width
+  valueOf dx
+  set self.width = 25
+  get self.y
+  valueOf dy
+  set self.y = -7
+  get self.height
+  valueOf dy
+  set self.height = 27
+
+
+/// inflatePoint
+// rect.inflatePoint()
+undefined
+(top=NaN, right=NaN, bottom=NaN, left=NaN, topLeft=(x=NaN, y=NaN), bottomRight=(x=NaN, y=NaN), width=NaN, height=NaN, size=(x=NaN, y=NaN), x=NaN, y=NaN)
+
+// rect.inflatePoint(new Point(1, 2))
+(top=1, right=7, bottom=12, left=0, topLeft=(x=0, y=1), bottomRight=(x=7, y=12), width=7, height=11, size=(x=7, y=11), x=0, y=1)
+
+// rect.inflatePoint({x: 5})
+(top=NaN, right=11, bottom=NaN, left=-4, topLeft=(x=-4, y=NaN), bottomRight=(x=11, y=NaN), width=15, height=NaN, size=(x=15, y=NaN), x=-4, y=NaN)
+
+// self.inflatePoint(other)
+  get self.x
+  get other.x
+  set self.x = 0
+  get self.width
+  get other.x
+  set self.width = 7
+  get self.y
+  get other.y
+  set self.y = 1
+  get self.height
+  get other.y
+  set self.height = 11
+
+
+/// offset
+// rect.offset()
+undefined
+(top=NaN, right=NaN, bottom=NaN, left=NaN, topLeft=(x=NaN, y=NaN), bottomRight=(x=NaN, y=NaN), width=5, height=7, size=(x=5, y=7), x=NaN, y=NaN)
+
+// rect.offset(1, 2)
+(top=5, right=7, bottom=12, left=2, topLeft=(x=2, y=5), bottomRight=(x=7, y=12), width=5, height=7, size=(x=5, y=7), x=2, y=5)
+
+// rect.offset('1', '2')
+(top=32, right=115, bottom=327, left=11, topLeft=(x=11, y=32), bottomRight=(x=115, y=327), width=5, height=7, size=(x=5, y=7), x=11, y=32)
+
+// self.offset(dx, dy) with valueOf
+  get self.x
+  valueOf dx
+  set self.x = 11
+  get self.y
+  valueOf dy
+  set self.y = 13
+
+
+/// offsetPoint
+// rect.offsetPoint()
+undefined
+(top=NaN, right=NaN, bottom=NaN, left=NaN, topLeft=(x=NaN, y=NaN), bottomRight=(x=NaN, y=NaN), width=5, height=7, size=(x=5, y=7), x=NaN, y=NaN)
+
+// rect.offsetPoint(new Point(1, 2))
+(top=5, right=7, bottom=12, left=2, topLeft=(x=2, y=5), bottomRight=(x=7, y=12), width=5, height=7, size=(x=5, y=7), x=2, y=5)
+
+// rect.offsetPoint({x: 5})
+(top=NaN, right=11, bottom=NaN, left=6, topLeft=(x=6, y=NaN), bottomRight=(x=11, y=NaN), width=5, height=7, size=(x=5, y=7), x=6, y=NaN)
+
+// self.offsetPoint(other)
+  get self.x
+  get other.x
+  set self.x = 2
+  get self.y
+  get other.y
+  set self.y = 5
+
+
+/// intersection
+// rect.intersection()
+(x=0, y=0, w=0, h=0)
+
+// rect.intersection(new Rectangle(3, 5, 7, 9))
+(x=3, y=5, w=3, h=5)
+
+// rect.intersection(new Rectangle(6, 5, 1, 1))
+(x=0, y=0, w=0, h=0)
+
+// new Rectangle().intersection(rect)
+(x=0, y=0, w=0, h=0)
+
+// rect.intersection(new Rectangle(NaN, 5, 1, 1))
+(x=0, y=0, w=0, h=0)
+
+// rect.intersection(new Rectangle('3', '5', '7', '9'))
+(x=3, y=5, w=3, h=5)
+
+// rect.intersection({x: 3, y: 5, width: 7, height: 1})
+(x=3, y=5, w=3, h=1)
+
+
+/// intersection: property access order
+// self.intersection(other), overlapping
+  get other.x
+  get other.y
+  get other.width
+  get other.height
+  call self.intersection((x=3, y=5, w=7, h=9))
+  call self.isEmpty()
+  get self.width
+  get self.height
+  call other.isEmpty()
+  get other.width
+  get other.height
+  get other.x
+  get self.x
+  get other.y
+  get self.y
+  get other.x
+  get other.width
+  get self.x
+  get self.width
+  get other.y
+  get other.height
+  get self.y
+  get self.height
+(x=3, y=5, w=3, h=5)
+
+// self.intersection(other), other is empty
+  get other.x
+  get other.y
+  get other.width
+  get other.height
+  call self.intersection((x=3, y=5, w=0, h=9))
+  call self.isEmpty()
+  get self.width
+  get self.height
+  call other.isEmpty()
+  get other.width
+(x=0, y=0, w=0, h=0)
+
+
+/// intersects
+// rect.intersects(new Rectangle(6, 5, 1, 1))
+false
+
+// self.intersects(other)
+  get other.x
+  get other.y
+  get other.width
+  get other.height
+  call self.intersection((x=3, y=5, w=7, h=9))
+  call self.isEmpty()
+  get self.width
+  get self.height
+  call other.isEmpty()
+  get other.width
+  get other.height
+  get other.x
+  get self.x
+  get other.y
+  get self.y
+  get other.x
+  get other.width
+  get self.x
+  get self.width
+  get other.y
+  get other.height
+  get self.y
+  get self.height
+true
+
+
+/// union
+// rect.union()
+(x=NaN, y=NaN, w=NaN, h=NaN)
+
+// rect.union(new Rectangle(3, 5, 7, 9))
+(x=1, y=3, w=9, h=11)
+
+// new Rectangle().union(rect) === rect
+false
+
+// rect.union(new Rectangle('3', '5', '7', '9'))
+(x=1, y=3, w=36, h=56)
+
+// rect.union({x: 3, y: 5, width: 7, height: 1})
+(x=1, y=3, w=9, h=7)
+
+// new Rectangle().union({x: 3, y: 5, width: 7, height: 1})
+undefined
+
+
+/// union: property access order
+// self.union(other), overlapping
+  call self.isEmpty()
+  get self.width
+  get self.height
+  call other.isEmpty()
+  get other.width
+  get other.height
+  get other.x
+  get self.x
+  get other.y
+  get self.y
+  get other.x
+  get other.width
+  get self.x
+  get self.width
+  get other.y
+  get other.height
+  get self.y
+  get self.height
+(x=1, y=3, w=9, h=11)
+
+// self.union(other), other is empty
+  call self.isEmpty()
+  get self.width
+  get self.height
+  call other.isEmpty()
+  get other.width
+  call self.clone()
+  get self.height
+  get self.width
+  get self.y
+  get self.x
+(x=1, y=3, w=5, h=7)
+
+// self.union(other), self is empty
+  call self.isEmpty()
+  get self.width
+  call other.clone()
+  get other.height
+  get other.width
+  get other.y
+  get other.x
+(x=3, y=5, w=7, h=9)
+
+
+/// setEmpty dispatch
+// new Rectangle()
+  call setEmpty()
+(x=0, y=0, w=0, h=0)
+
+// new Rectangle(1, 3, 5, 7).intersection(new Rectangle(6, 5, 1, 1))
+  call setEmpty()
+  call setEmpty()
+(x=0, y=0, w=0, h=0)
+

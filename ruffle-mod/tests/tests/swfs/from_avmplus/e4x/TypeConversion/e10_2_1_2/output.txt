@@ -1,0 +1,13 @@
+EscapeElementValue('"')       : PASSED!
+EscapeElementValue('<')        : PASSED!
+EscapeElementValue('>')        : PASSED!
+EscapeElementValue('&')        : PASSED!
+EscapeElementValue('&#x9')        : PASSED!
+EscapeElementValue('&#xA')        : PASSED!
+EscapeElementValue('&#xD')        : PASSED!
+EscapeElementValue('	')        : PASSED!
+EscapeElementValue('
+')        : PASSED!
+EscapeElementValue('
+')        : PASSED!
+TypeError: Error #2023: Class Test$ must inherit from Sprite to link to the root.

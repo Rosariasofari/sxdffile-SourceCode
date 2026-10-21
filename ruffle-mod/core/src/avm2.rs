@@ -12,7 +12,7 @@ use crate::avm2::globals::{
     SystemClassDefs, SystemClasses, init_builtin_system_class_defs, init_builtin_system_classes,
     init_native_system_classes,
 };
-use crate::avm2::method::{Method, NativeMethodImpl};
+pub(crate) use crate::avm2::method::{Method, NativeMethodImpl};
 use crate::avm2::object::FunctionObject;
 use crate::avm2::scope::ScopeChain;
 use crate::avm2::script::{Script, TranslationUnit};

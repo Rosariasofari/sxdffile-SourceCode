@@ -1,0 +1,81 @@
+class Test {
+    
+    static function main(current) {
+        trace("// obj1: methods as members");
+        var obj1 = {
+            __proto__: null,
+            valueOf: function() {
+                trace("valueOf called!");
+                return 1;
+            },
+            toString: function() {
+                trace("toString called!");
+                return "[obj as string]";
+            }
+        };
+
+        trace("obj1 as num: " + (0 + obj1));
+        trace(obj1);
+        trace("");
+
+        trace("// obj2: methods as properties");
+        var obj2 = { __proto__: null };
+        Object.prototype.addProperty.call(obj2, "valueOf", function() {
+            trace("valueOf property called!");
+            return obj1.valueOf;
+        }, null);
+        Object.prototype.addProperty.call(obj2, "toString", function() {
+            trace("toString property called!");
+            return obj1.toString;
+        }, null);
+
+        trace("obj2 as num: " + (0 + obj2));
+        trace(obj2);
+        trace("");
+
+        trace("// obj3: methods as throwing properties");
+        var obj3 = { __proto__: null };
+        Object.prototype.addProperty.call(obj3, "valueOf", function() {
+            throw "error from valueOf!";
+        }, null);
+        Object.prototype.addProperty.call(obj3, "toString", function() {
+            throw "error from toString!";
+        }, null);
+
+        try {
+            trace("obj3 as num: " + (0 + obj3));
+        } catch(e) {
+            trace("obj3 as num: caught " + e);
+        }
+        try {
+            trace(obj3);
+        } catch(e) {
+            trace("obj3 as string: caught " + e);
+        }
+        trace("");
+
+        trace("// obj4: methods through __resolve");
+        var obj4 = {
+            __proto__: null,
+            __resolve: function(name) {
+                trace("__resolve(" + name + ") called!");
+                return name == "valueOf" ? obj1.valueOf
+                    : name == "toString" ? obj1.toString
+                    : undefined;
+            }
+        };
+
+        trace("obj4 as num: " + (0 + obj4));
+        trace(obj4);
+
+        fscommand("quit");
+    }
+
+    static function traceArgs() {
+        trace("called with " + arguments.length + " arguments:");
+        for (var k in arguments) {
+            trace("  " + k + ": " + arguments[k]);
+        }
+        trace("");
+    }
+}

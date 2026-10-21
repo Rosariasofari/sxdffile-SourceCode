@@ -312,6 +312,10 @@ impl SwfMovieData {
         load_bytes_info: Option<LoadBytesInfo>,
     ) -> Result<Self, swf::error::Error> {
         let compressed_len = swf_data.len();
+        // SXDffle：解压出来的整块 SWF 字节会**永久常驻**（挂在 SwfMovieData 上，
+        // 不受 GC 管理），它的归属必须精确：战报一次加载 400 部 SWF、797MB，
+        // 过去这些字节被记进「其他」，看起来像来路不明的大块。
+        let _sxd_tag = crate::alloc_tag::Guard::new(1);
         let swf_buf = swf::read::decompress_swf(swf_data)?;
         let encoding = swf::SwfStr::encoding_for_version(swf_buf.header.version());
 

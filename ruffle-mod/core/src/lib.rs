@@ -15,7 +15,9 @@ extern crate num_derive;
 #[macro_use]
 mod avm1;
 mod avm2;
-pub mod alloc_tag;
+/// SXDffle：分配归属标签（已下移到 ruffle_common，宿主与引擎共用同一份）。
+pub use ruffle_common::alloc_tag;
+pub mod sxd_watch;
 pub mod loader_stats;
 mod avm_rng;
 mod binary_data;

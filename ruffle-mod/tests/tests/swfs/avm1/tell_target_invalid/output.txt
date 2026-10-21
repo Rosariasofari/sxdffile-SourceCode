@@ -1,0 +1,5 @@
+/tellTarget('dummy') { gotoAndPlay(n); }
+pass
+/tellTarget(undefined) { gotoAndStop(5); }
+/tellTarget(undefined) { gotoAndPlay(n); }
+pass

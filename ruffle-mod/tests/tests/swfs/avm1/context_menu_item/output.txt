@@ -1,0 +1,97 @@
+/// Constructors
+// new ContextMenuItem()
+  visible = true
+  enabled = true
+  separatorBefore = false
+  onSelect = undefined
+  caption = undefined
+
+// new ContextMenuItem('caption', callback, true, false, false)
+  visible = false
+  enabled = false
+  separatorBefore = true
+  onSelect = [function]
+  caption = "caption"
+true
+
+// new ContextMenuItem(undefined, undefined, undefined, undefined, undefined)
+  visible = true
+  enabled = true
+  separatorBefore = false
+  onSelect = undefined
+  caption = undefined
+
+// new ContextMenuItem(null, null, null, null, null)
+  visible = true
+  enabled = true
+  separatorBefore = false
+  onSelect = null
+  caption = null
+
+// new ContextMenuItem(0, 0, 0, 0, 0)
+  visible = 0
+  enabled = 0
+  separatorBefore = 0
+  onSelect = 0
+  caption = 0
+
+// new ContextMenuItem('', '', '', '', '')
+  visible = ""
+  enabled = ""
+  separatorBefore = ""
+  onSelect = ""
+  caption = ""
+
+// new ContextMenuItem(NaN, NaN, NaN, NaN, NaN)
+  visible = NaN
+  enabled = NaN
+  separatorBefore = NaN
+  onSelect = NaN
+  caption = NaN
+
+// ContextMenuItem.call(obj, 'caption', callback)
+undefined
+visible enabled separatorBefore onSelect caption 
+
+
+/// Prototype
+// ContextMenuItem.prototype
+
+
+// ContextMenuItem.prototype, without DONT_ENUM
+copy 
+
+// delete ContextMenuItem.prototype.copy
+false
+
+
+/// copy
+// item.copy()
+  visible = false
+  enabled = false
+  separatorBefore = true
+  onSelect = [function]
+  caption = "caption"
+true
+true
+
+// item.copy(), with tracing properties
+  new ContextMenuItem()
+  get item.caption
+  set copy.caption = 5
+  get item.onSelect
+  set copy.onSelect = "callback"
+  get item.separatorBefore
+  set copy.separatorBefore = 1
+  get item.enabled
+  set copy.enabled = 0
+  get item.visible
+  set copy.visible = "x"
+
+// ContextMenuItem.prototype.copy.call({})
+  visible = undefined
+  enabled = undefined
+  separatorBefore = undefined
+  onSelect = undefined
+  caption = undefined
+

@@ -1,0 +1,263 @@
+use std::collections::HashMap;
+
+use crate::test::Font;
+use chrono::{DateTime, Utc};
+use ruffle_core::backend::ui::{
+    DialogResultFuture, FileDialogResult, FileDialogSelection, FileFilter, FontDefinition,
+    FullscreenError, LanguageIdentifier, MouseCursor, MultiDialogResultFuture,
+    MultiFileDialogResult, US_ENGLISH, UiBackend,
+};
+#[cfg(feature = "freetype")]
+use ruffle_core::font::FontAtlases;
+use ruffle_core::font::{FontFileData, FontQuery};
+use serde::Deserialize;
+use url::Url;
+
+#[derive(Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum FontRendererKind {
+    #[default]
+    Embedded,
+    Freetype,
+}
+
+impl FontRendererKind {
+    pub fn can_run(self) -> bool {
+        !matches!(self, Self::Freetype) || cfg!(feature = "freetype")
+    }
+}
+
+/// A simulated file selection, for use in tests.
+pub struct TestFileSelection {
+    file_name: String,
+    contents: Vec<u8>,
+}
+
+impl TestFileSelection {
+    fn new(file_name: String) -> Self {
+        Self {
+            file_name,
+            contents: b"Hello, World!".to_vec(),
+        }
+    }
+}
+
+impl FileDialogSelection for TestFileSelection {
+    fn creation_time(&self) -> Option<DateTime<Utc>> {
+        None
+    }
+
+    fn modification_time(&self) -> Option<DateTime<Utc>> {
+        None
+    }
+
+    fn file_name(&self) -> String {
+        self.file_name.clone()
+    }
+
+    fn size(&self) -> Option<u64> {
+        Some(self.contents.len() as u64)
+    }
+
+    fn file_type(&self) -> Option<String> {
+        Some(".txt".to_string())
+    }
+
+    fn contents(&self) -> &[u8] {
+        &self.contents
+    }
+
+    fn write_and_refresh(&mut self, data: &[u8]) {
+        self.contents = data.to_vec();
+    }
+}
+
+/// This is an implementation of [`UiBackend`], designed for use in tests
+///
+/// Fundamentally, this is mostly the same as [`NullUiBackend`] with the following differences:
+/// * Attempting to display an open dialog with a filter with description "debug-select-success" will simulate successfully selecting a file,
+///   otherwise a user cancellation will be simulated
+/// * Attempting to display a file save dialog with a file name hint of "debug-success.txt" will simulate successfully selecting a destination
+///   otherwise a user cancellation will be simulated
+/// * Simulated in-memory clipboard
+pub struct TestUiBackend {
+    fonts: HashMap<FontQuery, Font>,
+    font_sorts: HashMap<FontQuery, Vec<FontQuery>>,
+    device_font_renderer: FontRendererKind,
+    #[cfg(feature = "freetype")]
+    font_atlases: FontAtlases,
+    clipboard: String,
+}
+
+impl TestUiBackend {
+    pub fn new(
+        fonts: HashMap<FontQuery, Font>,
+        font_sorts: HashMap<FontQuery, Vec<FontQuery>>,
+        device_font_renderer: FontRendererKind,
+    ) -> Self {
+        Self {
+            fonts,
+            font_sorts,
+            device_font_renderer,
+            #[cfg(feature = "freetype")]
+            font_atlases: FontAtlases::new(),
+            clipboard: "".to_string(),
+        }
+    }
+}
+
+impl UiBackend for TestUiBackend {
+    fn mouse_visible(&self) -> bool {
+        true
+    }
+
+    fn set_mouse_visible(&mut self, _visible: bool) {}
+
+    fn set_mouse_cursor(&mut self, _cursor: MouseCursor) {}
+
+    fn clipboard_content(&mut self) -> String {
+        self.clipboard.clone()
+    }
+
+    fn set_clipboard_content(&mut self, content: String) {
+        self.clipboard = content;
+    }
+
+    fn set_fullscreen(&mut self, _is_full: bool) -> Result<(), FullscreenError> {
+        Ok(())
+    }
+
+    fn display_root_movie_download_failed_message(&self, _invalid_swf: bool, _fetch_error: String) {
+    }
+
+    fn message(&self, _message: &str) {}
+
+    fn open_virtual_keyboard(&self) {}
+
+    fn close_virtual_keyboard(&self) {}
+
+    fn language(&self) -> LanguageIdentifier {
+        US_ENGLISH.clone()
+    }
+
+    fn display_unsupported_video(&self, _url: Url) {}
+
+    fn load_device_font(&self, query: &FontQuery, register: &mut dyn FnMut(FontDefinition)) {
+        let Some(font) = self.fonts.get(query) else {
+            return;
+        };
+
+        match self.device_font_renderer {
+            FontRendererKind::Embedded => {
+                register(FontDefinition::FontFile {
+                    name: font.family.to_owned(),
+                    is_bold: font.bold,
+                    is_italic: font.italic,
+                    data: FontFileData::new(font.bytes.clone()),
+                    index: 0,
+                });
+            }
+            #[cfg(feature = "freetype")]
+            FontRendererKind::Freetype => {
+                let font_renderer =
+                    freetype_renderer(font, &self.font_atlases).unwrap_or_else(|e| {
+                        panic!("Couldn't create FreeType renderer for {}: {e}", font.family)
+                    });
+                register(FontDefinition::ExternalRenderer {
+                    name: font.family.to_owned(),
+                    is_bold: font.bold,
+                    is_italic: font.italic,
+                    font_renderer: Box::new(font_renderer),
+                });
+            }
+            #[cfg(not(feature = "freetype"))]
+            FontRendererKind::Freetype => {
+                unreachable!("tests requiring freetype should be skipped when it's unavailable");
+            }
+        }
+    }
+
+    fn sort_device_fonts(
+        &self,
+        query: &FontQuery,
+        register: &mut dyn FnMut(FontDefinition),
+    ) -> Vec<FontQuery> {
+        let Some(sort) = self.font_sorts.get(query) else {
+            return Vec::new();
+        };
+        for query in sort {
+            self.load_device_font(query, register);
+        }
+        sort.clone()
+    }
+
+    fn display_file_open_dialog(&mut self, filters: Vec<FileFilter>) -> Option<DialogResultFuture> {
+        Some(Box::pin(async move {
+            // If filters has the magic debug-select-success filter, then return a fake file for testing
+            Ok(
+                if filters
+                    .iter()
+                    .any(|f| f.description == "debug-select-success")
+                {
+                    FileDialogResult::Selection(Box::new(TestFileSelection::new(
+                        "test.txt".to_string(),
+                    )))
+                } else {
+                    FileDialogResult::Canceled
+                },
+            )
+        }))
+    }
+
+    fn display_file_open_dialog_multiple(
+        &mut self,
+        filters: Vec<FileFilter>,
+    ) -> Option<MultiDialogResultFuture> {
+        Some(Box::pin(async move {
+            // Same magic filter as single-file, but returns multiple fake files
+            Ok(
+                if filters
+                    .iter()
+                    .any(|f| f.description == "debug-select-success")
+                {
+                    MultiFileDialogResult::Selection(vec![
+                        Box::new(TestFileSelection::new("test1.txt".to_string())),
+                        Box::new(TestFileSelection::new("test2.txt".to_string())),
+                        Box::new(TestFileSelection::new("test3.txt".to_string())),
+                    ])
+                } else {
+                    MultiFileDialogResult::Canceled
+                },
+            )
+        }))
+    }
+
+    fn display_file_save_dialog(
+        &mut self,
+        file_name: String,
+        _title: String,
+    ) -> Option<DialogResultFuture> {
+        Some(Box::pin(async move {
+            // If file_name has the magic debug-success.txt value, then return a fake file for testing
+            Ok(if file_name == "debug-success.txt" {
+                FileDialogResult::Selection(Box::new(TestFileSelection::new(file_name)))
+            } else {
+                FileDialogResult::Canceled
+            })
+        }))
+    }
+
+    fn close_file_dialog(&mut self) {}
+}
+
+#[cfg(feature = "freetype")]
+fn freetype_renderer(
+    font: &Font,
+    atlases: &FontAtlases,
+) -> anyhow::Result<ruffle_frontend_utils::backends::ui::FreetypeFontRenderer> {
+    use std::io::Write;
+
+    let mut file = tempfile::NamedTempFile::new()?;
+    file.write_all(&font.bytes)?;
+    Ok(ruffle_frontend_utils::backends::ui::FreetypeFontRenderer::new(file.path(), 0, atlases)?)
+}

@@ -30,13 +30,18 @@ pub fn slab_bytes() -> usize {
     types::slab_bytes()
 }
 
+/// (峰值, 已归还)：判断「GC 收完之后到底还给系统多少」。
+pub fn slab_reclaim_stats() -> (usize, usize) {
+    types::slab_reclaim_stats()
+}
+
 /// SXDffle：GC 堆字节统计，(累计分配, 累计释放, 当前存活对象数)。
 pub fn heap_byte_stats() -> (usize, usize, usize) {
     types::heap_byte_stats()
 }
 
 /// SXDffle：存活对象按分配尺寸分桶（用来判断千万级对象到底是什么）。
-pub use types::{SIZE_CLASSES, SIZE_CLASS_LABELS, live_size_histogram};
+pub use types::{SIZE_CLASSES, SIZE_CLASS_LABELS, SLAB_HOOK, live_size_histogram};
 mod unsize;
 
 #[cfg(feature = "enum-map")]

@@ -1,0 +1,15 @@
+num_frames = 1
+
+[image_comparisons.output]
+tolerance = 1
+max_outliers = 850
+
+[player_options]
+with_renderer = { quality = "high" }
+
+[[compilers]]
+type = "Asc"
+target = "test.swf"
+class = "Test"
+scripts = ["Test.as", "AGALMiniAssembler.as"]
+swf_version = 43

@@ -648,7 +648,11 @@ impl<'a, 'gc> Activation<'a, 'gc> {
                 // 1/4096 采样：取 Debug 的变体名（截断字段），
                 // 这样不会漏掉任何冷门但很耗时的指令。
                 let dbg = format!("{op:?}");
-                crate::avm2::opstats::note(crate::avm2::opstats::variant_name(&dbg));
+                let name = crate::avm2::opstats::variant_name(&dbg);
+                crate::avm2::opstats::note(name);
+                // SXDffle：同一个采样点顺手喂慢帧看门狗 —— 长帧卡住时，
+                // 渲染循环的所有采样都停摆，只有这里还在跑到。
+                crate::sxd_watch::tick(method, name);
             }
 
             let result = match op {
