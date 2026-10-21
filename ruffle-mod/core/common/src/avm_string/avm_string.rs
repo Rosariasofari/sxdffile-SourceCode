@@ -108,6 +108,10 @@ impl<'gc> AvmString<'gc> {
                 new_size * 2
             };
 
+            // SXDffle：`s += x` 的每次拼接都新建一整块缓冲，旧的那块要等 GC。
+            // 一帧内跑几万次拼接就是几百 MB 的「活的垃圾」—— 这里单独打标，
+            // 好确认战报峰值里那 1.5GB 的 >8MB 大块到底是不是它。
+            let _sxd_tag = crate::alloc_tag::Guard::new(11);
             let mut out = WString::with_capacity(new_capacity, left.is_wide() || right.is_wide());
             out.push_str(&left);
             out.push_str(&right);

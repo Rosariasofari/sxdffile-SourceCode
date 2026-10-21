@@ -334,14 +334,16 @@ static SLAB_RECLAIMED: AtomicUsize = AtomicUsize::new(0);
 
 /// 当前 slab 占用（活着的 1MB 块合计）。
 pub fn slab_bytes() -> usize {
-    SLAB_LIVE.load(Ordering::Relaxed)
+    // SLAB_LIVE 记的是「向系统要了多少字节」，每块是 2MB（含 1MB 对齐余量），
+    // 对外一律给出逻辑占用（1MB/块），免得所有报表都要记得除 2。
+    SLAB_LIVE.load(Ordering::Relaxed) / 2
 }
 
 /// (峰值, 已归还)：用来判断「GC 收完之后到底还给系统多少」。
 pub fn slab_reclaim_stats() -> (usize, usize) {
     (
-        SLAB_TOTAL.load(Ordering::Relaxed),
-        SLAB_RECLAIMED.load(Ordering::Relaxed),
+        SLAB_TOTAL.load(Ordering::Relaxed) / 2,
+        SLAB_RECLAIMED.load(Ordering::Relaxed) / 2,
     )
 }
 

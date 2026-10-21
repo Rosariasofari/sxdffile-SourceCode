@@ -369,6 +369,9 @@ impl<'gc> ArrayStorage<'gc> {
     pub fn push(&mut self, item: Value<'gc>) {
         match self {
             ArrayStorage::Dense { storage, occupied_count, .. } => {
+                // SXDffle：push 触发的扩容才是战报里真正的大块来源
+                // （`ArrayStorage::new` 只覆盖初始容量，那个通常很小）。
+                let _sxd_tag = crate::alloc_tag::Guard::new(8);
                 storage.push(Some(item));
                 *occupied_count += 1;
             }
@@ -428,6 +431,7 @@ impl<'gc> ArrayStorage<'gc> {
     pub fn push_hole(&mut self) {
         match self {
             ArrayStorage::Dense { storage, .. } => {
+                let _sxd_tag = crate::alloc_tag::Guard::new(8);
                 storage.push(None);
                 self.maybe_convert_to_sparse();
             }

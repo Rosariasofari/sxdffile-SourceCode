@@ -183,6 +183,15 @@ pub const TAG_LABELS: [&str; TAG_COUNT] = [
     "GC slab",
 ];
 
+/// 标签字节的「逻辑换算」。
+///
+/// GC slab 为了拿到 1MB 对齐按 2MB 向系统申请（多出来的那半段不写、不占物理页），
+/// 分配器只知道 2MB，所以打出归属时要除回去，否则 slab 会被算成两倍，
+/// 「档位合计」甚至会超过 RSS（0.261121 的 6204MB vs RSS 6348MB 就是这么来的）。
+pub fn tag_bytes(i: usize, b: usize) -> usize {
+    if i == 12 { b / 2 } else { b }
+}
+
 pub const ALLOC_BUCKET_LABELS: [&str; ALLOC_BUCKETS] = [
     "≤64B", "65-256B", "257-1K", "1K-4K", "4K-16K", "16K-64K", "64K-256K", "256K-1M", "1M-8M",
     ">8M",
@@ -236,16 +245,20 @@ struct TrackingAlloc {
 //
 // 64K 以上的分配只有约 1900 次，但合计 688MB。它们的「尺寸重复度」
 // 能直接指认来源：若某个尺寸（如 2.6MB）出现几十次，那就是同一类结构。
-static BIG_BLOCKS: std::sync::Mutex<Vec<(usize, usize)>> = std::sync::Mutex::new(Vec::new());
+static BIG_BLOCKS: std::sync::Mutex<Vec<(usize, u8, usize)>> = std::sync::Mutex::new(Vec::new());
 
 #[inline]
-fn note_big(size: usize) {
+fn note_big(size: usize, tag: u8) {
     // 必须 try_lock：加锁/扩容本身可能触发分配，递归进来要能安全跳过。
+    //
+    // SXDffle 0.261122：按 (尺寸, 标签) 计数。0.261121 的 TOP 只有尺寸，
+    // 而 816 个 2MB 的块其实是 GC slab —— 和「脚本里的 2MB 缓冲」混在一起，
+    // 无法分辨。加上标签后，「20480KB×40[AS3字串]」这种行才能当证据。
     if let Ok(mut v) = BIG_BLOCKS.try_lock() {
-        if let Some(e) = v.iter_mut().find(|e| e.0 == size) {
-            e.1 += 1;
+        if let Some(e) = v.iter_mut().find(|e| e.0 == size && e.1 == tag) {
+            e.2 += 1;
         } else if v.len() < 512 {
-            v.push((size, 1));
+            v.push((size, tag, 1));
         }
     }
 }
@@ -255,24 +268,24 @@ fn note_big(size: usize) {
 /// 0.261083 之前这里没有扣减，日志里的「64K+ 共 688MB」其实是累计值，
 /// 会把人误导到「有 688MB 大块永不释放」的结论上。
 #[inline]
-fn note_big_free(size: usize) {
+fn note_big_free(size: usize, tag: u8) {
     if let Ok(mut v) = BIG_BLOCKS.try_lock() {
-        if let Some(e) = v.iter_mut().find(|e| e.0 == size) {
-            e.1 = e.1.saturating_sub(1);
-            if e.1 == 0 {
-                v.retain(|e| e.0 != size);
+        if let Some(e) = v.iter_mut().find(|e| e.0 == size && e.1 == tag) {
+            e.2 = e.2.saturating_sub(1);
+            if e.2 == 0 {
+                v.retain(|e| !(e.0 == size && e.1 == tag));
             }
         }
     }
 }
 
 /// 返回按字节排序的大块尺寸 TOP N：(尺寸, 存活块数)。
-pub fn big_alloc_top(n: usize) -> Vec<(usize, usize)> {
+pub fn big_alloc_top(n: usize) -> Vec<(usize, u8, usize)> {
     let mut v = match BIG_BLOCKS.try_lock() {
         Ok(g) => g.clone(),
         Err(_) => return Vec::new(),
     };
-    v.sort_by(|a, b| (b.0 * b.1).cmp(&(a.0 * a.1)));
+    v.sort_by(|a, b| (b.0 * b.2).cmp(&(a.0 * a.2)));
     v.truncate(n);
     v
 }
@@ -305,20 +318,22 @@ fn note_alloc(ptr: *mut u8, size: usize) {
         // 直方图（Mutex + 512 项线性查找）只对 ≥1MB 的块维护。
         // 64KB~1MB 这一档一帧能有几万次，为了一张 TOP 表付这个代价不值。
         if size >= 1048576 {
-            note_big(size);
+            note_big(size, ruffle_core::alloc_tag::current());
         }
     }
 }
 
 #[inline]
-fn note_free(ptr: *mut u8, size: usize) {
+fn note_free(ptr: *mut u8, size: usize, tag: u8) {
     use std::sync::atomic::Ordering::Relaxed;
     let b = alloc_bucket(size);
     if size >= 65536 {
         big_unregister(ptr as usize);
     }
     if size >= 1048576 {
-        note_big_free(size);
+        // 必须用「分配时写进块头的标签」而不是当前阶段标签：
+        // 大块往往是在 GC 里释放的，那时当前标签是 0，会把 AS3 的账扣到「其他」头上。
+        note_big_free(size, tag);
     }
     // saturating：dealloc 的 layout 理论上与 alloc 相同，但 realloc 边界情况
     // 可能让计数对不齐，这里宁可少算也不要下溢。
@@ -374,10 +389,16 @@ unsafe impl std::alloc::GlobalAlloc for TrackingAlloc {
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
-        note_free(ptr, layout.size());
-        if big_header_ok(layout.size(), layout.align()) {
+        let big = big_header_ok(layout.size(), layout.align());
+        let hdr_tag = if big {
+            unsafe { *(ptr.sub(BIG_HEADER)) }
+        } else {
+            ruffle_core::alloc_tag::current()
+        };
+        note_free(ptr, layout.size(), hdr_tag);
+        if big {
             let base = unsafe { ptr.sub(BIG_HEADER) };
-            let tag = unsafe { *base } as usize;
+            let tag = hdr_tag as usize;
             if tag < TAG_COUNT {
                 let _ = TAG_BYTES[tag].fetch_update(
                     std::sync::atomic::Ordering::Relaxed,
@@ -408,7 +429,7 @@ unsafe impl std::alloc::GlobalAlloc for TrackingAlloc {
         if !old_big && !new_big {
             let p = unsafe { self.inner.realloc(ptr, layout, new_size) };
             if !p.is_null() {
-                note_free(ptr, layout.size());
+                note_free(ptr, layout.size(), ruffle_core::alloc_tag::current());
                 note_alloc(p, new_size);
             }
             return p;

@@ -165,11 +165,12 @@ fn ensure_mem_monitor() {
                             let (tags, _tag_total) = crate::alloc_tag_stats();
                             let mut tparts: Vec<String> = Vec::new();
                             for (i, b) in tags.iter().enumerate() {
-                                if *b >= 32 * 1024 * 1024 {
+                                let lb = crate::tag_bytes(i, *b);
+                                if lb >= 32 * 1024 * 1024 {
                                     tparts.push(format!(
                                         "{} {}MB",
                                         crate::TAG_LABELS[i],
-                                        b / (1024 * 1024)
+                                        lb / (1024 * 1024)
                                     ));
                                 }
                             }
@@ -177,7 +178,8 @@ fn ensure_mem_monitor() {
                                 "SXDffle 慢帧 {}ms · RSS {}MB · 档位合计 {}MB（≥64K {}块/{}MB · <64K {}块/{}MB）· slab {}MB · GC {}万对象 · SWF {}部/{}MB",
                                 ms,
                                 mb,
-                                total / (1024 * 1024),
+                                total.saturating_sub(ruffle_core::Player::gc_slab_bytes())
+                                    / (1024 * 1024),
                                 big_n,
                                 big / (1024 * 1024),
                                 rest_n,
@@ -1744,7 +1746,8 @@ fn render_thread(
                     log::warn!(
                         "SXDffle embed: 爆发快照 RSS {}MB · 档位合计 {}MB · slab {}MB · GC {}万对象 · 位图 {}个/{}MB · SWF {}部/{}MB · {}",
                         mb,
-                        total / (1024 * 1024),
+                        // 档位按分配器看到的尺寸统计，slab 每块多算了 1MB 对齐余量
+                        total.saturating_sub(ruffle_core::Player::gc_slab_bytes()) / (1024 * 1024),
                         ruffle_core::Player::gc_slab_bytes() / (1024 * 1024),
                         objs / 10000,
                         bm_n,
@@ -1758,7 +1761,12 @@ fn render_thread(
                     if !top.is_empty() {
                         let line: Vec<String> = top
                             .iter()
-                            .map(|(sz, n)| format!("{}KB×{}", sz / 1024, n))
+                            .map(|(sz, tag, n)| format!(
+                                "{}KB×{}[{}]",
+                                sz / 1024,
+                                n,
+                                crate::TAG_LABELS.get(*tag as usize).copied().unwrap_or("?")
+                            ))
                             .collect();
                         log::warn!("SXDffle embed: 爆发大块 TOP {}", line.join(" · "));
                     }
@@ -1769,11 +1777,12 @@ fn render_thread(
                         let (tags, tag_total) = crate::alloc_tag_stats();
                         let mut tparts: Vec<String> = Vec::new();
                         for (i, b) in tags.iter().enumerate() {
-                            if *b >= 8 * 1024 * 1024 {
+                            let lb = crate::tag_bytes(i, *b);
+                            if lb >= 8 * 1024 * 1024 {
                                 tparts.push(format!(
                                     "{} {}MB",
                                     crate::TAG_LABELS[i],
-                                    b / (1024 * 1024)
+                                    lb / (1024 * 1024)
                                 ));
                             }
                         }
@@ -2034,7 +2043,12 @@ fn render_thread(
                 if !big.is_empty() {
                     let line: Vec<String> = big
                         .iter()
-                        .map(|(sz, n)| format!("{}KB×{}", sz / 1024, n))
+                        .map(|(sz, tag, n)| format!(
+                                "{}KB×{}[{}]",
+                                sz / 1024,
+                                n,
+                                crate::TAG_LABELS.get(*tag as usize).copied().unwrap_or("?")
+                            ))
                         .collect();
                     log::info!("SXDffle embed: 大块 TOP {}", line.join(" · "));
                 }

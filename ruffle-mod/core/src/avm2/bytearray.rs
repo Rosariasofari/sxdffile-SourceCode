@@ -289,6 +289,9 @@ impl ByteArrayStorage {
 
     #[inline]
     pub fn set_length(&mut self, new_len: usize) {
+        // SXDffle：`ba.length = n` 直接走这里，不经过 write_at，
+        // 之前完全没被算进「AS3字节流」，战报里几 MB 的缓冲区就无主了。
+        let _sxd_tag = crate::alloc_tag::Guard::new(10);
         self.bytes.resize(new_len, 0);
         self.position.set(self.position().min(new_len));
     }
