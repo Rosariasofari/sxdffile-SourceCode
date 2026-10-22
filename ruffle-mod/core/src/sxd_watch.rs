@@ -75,6 +75,43 @@ pub fn frame_elapsed_ms() -> Option<u64> {
     Some(now_us().saturating_sub(start) / 1000)
 }
 
+/// 当前 AS3 调用深度（run_actions 嵌套层数）。
+///
+/// 阶段 A 的回收只在 depth==1（最外层脚本回调）启用：那一层没有父级
+/// Activation 压在 Rust 栈上，根集可控；之前的 SIGSEGV 正是父级帧没被根覆盖。
+static CALL_DEPTH: AtomicU64 = AtomicU64::new(0);
+static MAX_DEPTH: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+pub fn call_depth() -> u64 {
+    CALL_DEPTH.load(Ordering::Relaxed)
+}
+
+#[inline]
+pub fn max_depth() -> u64 {
+    MAX_DEPTH.load(Ordering::Relaxed)
+}
+
+pub struct CallDepthGuard;
+
+impl CallDepthGuard {
+    #[inline]
+    pub fn new() -> Self {
+        let d = CALL_DEPTH.fetch_add(1, Ordering::Relaxed) + 1;
+        let _ = MAX_DEPTH.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |m| {
+            Some(if d > m { d } else { m })
+        });
+        CallDepthGuard
+    }
+}
+
+impl Drop for CallDepthGuard {
+    #[inline]
+    fn drop(&mut self) {
+        CALL_DEPTH.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// 一次慢帧现场快照。
 #[derive(Clone, Debug)]
 pub struct SlowFrame {
@@ -118,10 +155,14 @@ pub fn tick(method: crate::avm2::Method<'_>, opname: &str) {
         return;
     }
 
-    let method_name = method
-        .method_name()
-        .map(|c| c.into_owned())
-        .unwrap_or_else(|| "<anonymous>".to_string());
+    let method_name = format!(
+        "{} (深度{})",
+        method
+            .method_name()
+            .map(|c| c.into_owned())
+            .unwrap_or_else(|| "<anonymous>".to_string()),
+        call_depth()
+    );
     let top_ops = crate::avm2::opstats::snapshot_top(4);
     if let Ok(mut guard) = SLOW.try_lock() {
         *guard = Some(SlowFrame {

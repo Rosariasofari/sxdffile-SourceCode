@@ -627,6 +627,8 @@ impl<'a, 'gc> Activation<'a, 'gc> {
     pub fn run_actions(&mut self, method: Method<'gc>) -> Result<Value<'gc>, Error<'gc>> {
         // SXDffle：标记「这段分配发生在 AS3 执行中」（嵌套调用会正确恢复旧标签）
         let _sxd_tag = crate::alloc_tag::Guard::new(3);
+        // SXDffle：记录调用深度，供「脚本执行中回收」判断是否处于最外层回调。
+        let _sxd_depth = crate::sxd_watch::CallDepthGuard::new();
         // The method must be verified at this point
 
         let verified_info = method.get_verified_info();
