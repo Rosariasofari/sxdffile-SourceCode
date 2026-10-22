@@ -182,7 +182,7 @@ pub fn send<'gc>(
         // The string needs to end with a null byte.
         data.push(0);
 
-        activation.context.sockets.send(handle, data);
+        let _ = activation.context.sockets.send(handle, data);
     }
 
     Ok(Value::Undefined)

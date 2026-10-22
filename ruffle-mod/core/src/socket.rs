@@ -76,6 +76,13 @@ static SOCKET_LAST_US: AtomicU64 = AtomicU64::new(0);
 static SOCKET_TX_N: AtomicU64 = AtomicU64::new(0);
 static SOCKET_TX_BYTES: AtomicU64 = AtomicU64::new(0);
 static SOCKET_TX_LAST_US: AtomicU64 = AtomicU64::new(0);
+/// 发送失败的次数（连接已断但 AS3 还在发）。
+static SOCKET_SEND_FAIL: AtomicU64 = AtomicU64::new(0);
+
+/// 发送失败次数。
+pub fn socket_send_fail_count() -> u64 {
+    SOCKET_SEND_FAIL.load(Ordering::Relaxed)
+}
 static TX_RECENT: std::sync::Mutex<Vec<(u64, usize, [u8; 4])>> = std::sync::Mutex::new(Vec::new());
 
 /// `(发送次数, 累计字节, 距最近一次发送毫秒)`。
@@ -251,7 +258,7 @@ impl<'gc> Sockets<'gc> {
         }
     }
 
-    pub fn send(&mut self, handle: SocketHandle, data: Vec<u8>) {
+    pub fn send(&mut self, handle: SocketHandle, data: Vec<u8>) -> bool {
         // SXDffle：发送侧统计 —— 卡住时「发了没有、发的是什么」和「收了什么」一样重要。
         SOCKET_TX_N.fetch_add(1, Ordering::Relaxed);
         SOCKET_TX_BYTES.fetch_add(data.len() as u64, Ordering::Relaxed);
@@ -268,13 +275,21 @@ impl<'gc> Sockets<'gc> {
                 }
             }
         }
-        if let Some(Socket { sender, .. }) = self.sockets.get_mut(handle) {
+        let mut ok = true;
+        if let Some(socket) = self.sockets.get_mut(handle) {
             // We use an unbounded socket, so this should only ever error if the channel is closed
             // (the receiver was dropped)
-            if let Err(e) = sender.borrow().try_send(data) {
+            if let Err(e) = socket.sender.borrow().try_send(data) {
+                // SXDffle：连接已经断了（后端读循环收到 EOF/错误，写任务随之结束）。
+                // 原来只打一行日志就完事，AS3 那边的 `connected` 还是 true，
+                // 游戏于是继续往一个死连接里发请求、然后一直等回包 —— 战报卡 96% 就是这个。
                 tracing::error!("Failed to send data to socket: {:?}", e);
+                socket.connected.set(false);
+                SOCKET_SEND_FAIL.fetch_add(1, Ordering::Relaxed);
+                ok = false;
             }
         }
+        ok
     }
 
     pub fn close_all(&mut self) {

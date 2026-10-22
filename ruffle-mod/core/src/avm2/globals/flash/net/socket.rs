@@ -5,7 +5,8 @@ use crate::avm2::error::{make_error_2002, make_error_2003, make_error_2008};
 use crate::avm2::function::FunctionArgs;
 pub use crate::avm2::object::socket_allocator;
 use crate::avm2::parameters::ParametersExt;
-use crate::avm2::{Activation, Error, Value};
+use crate::avm2::{Activation, Avm2, Error, Value};
+use crate::avm2::object::EventObject;
 use crate::context::UpdateContext;
 use crate::string::AvmString;
 use encoding_rs::Encoding;
@@ -224,13 +225,18 @@ pub fn flush<'gc>(
             return Err(make_error_2002(activation));
         }
 
-        let UpdateContext { sockets, .. } = activation.context;
-
         let mut buffer = socket.write_buffer();
         let len = buffer.len();
         let data = buffer.drain(..len).collect::<Vec<_>>();
 
-        sockets.send(handle, data)
+        let ok = activation.context.sockets.send(handle, data);
+        if !ok {
+            // SXDffle：连接已断，但 AS3 之前收不到任何通知，`connected` 仍是 true，
+            // 游戏会一直往死连接里发请求并等回包。这里补派 close，让它走重连逻辑。
+            tracing::warn!("SXDffle: Socket 发送失败（连接已断）→ 补派 close 事件");
+            let close_evt = EventObject::bare_default_event(activation.context, "close");
+            Avm2::dispatch_event(activation.context, close_evt, this);
+        }
     }
 
     Ok(Value::Undefined)

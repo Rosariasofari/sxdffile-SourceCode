@@ -2350,9 +2350,10 @@ fn render_thread(
                         })
                         .collect();
                     log::info!(
-                        "SXDffle embed: Socket 发送 {} 次 / 累计 {}KB · 最近发送 {}前 {}",
+                        "SXDffle embed: Socket 发送 {} 次 / 累计 {}KB · 失败 {} 次 · 最近发送 {}前 {}",
                         txn,
                         txb / 1024,
+                        ruffle_core::socket::socket_send_fail_count(),
                         idle,
                         items.join(" · ")
                     );
