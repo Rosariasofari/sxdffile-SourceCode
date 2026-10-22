@@ -2633,6 +2633,11 @@ pub struct SwfBodyDecoder {
     remaining: usize,
     /// SWF 头在解压流里的长度（tag stream 从这之后开始）。
     pub data_offset: usize,
+    /// SWF 头的原始字节（RECT + 帧率 + 帧数），长度 = `data_offset`。
+    ///
+    /// 窗口存储拿到的是**跳过头之后**的 tag stream，没法再回头解析 RECT，
+    /// 所以这里把头部原样留一份给 `parse_header_ext_from_parts`。
+    pub header_bytes: Vec<u8>,
     /// 压缩格式。
     pub compression: Compression,
     /// SWF 版本。
@@ -2696,31 +2701,54 @@ impl SwfBodyDecoder {
             pending_pos: 0,
             remaining,
             data_offset: offset,
+            header_bytes: head[..offset].to_vec(),
             compression,
             version,
             uncompressed_len: uncompressed_len as i32,
         })
     }
 
-    /// tag stream 还有多少字节没交付。
+    /// tag stream 还有多少字节没交付（不含已读进 `pending` 的部分）。
     pub fn remaining(&self) -> usize {
         self.remaining
     }
 
+    /// tag stream 的总长度（含已读进 `pending`、还没交付的部分）。
+    ///
+    /// SXDffle 0.261146：**必须用这个，不能用 `remaining()`。**
+    /// 构造时为了量 SWF 头长度会先读 128 字节，其中 `offset..` 那段
+    /// 已经在 `pending` 里了；`remaining()` 是扣掉它的值，
+    /// 拿它当总长会少 `n - offset` 字节 —— 表现就是 tag 流尾部被截断，
+    /// 解析到一半 EOF，满屏 `Unknown tag code`。
+    pub fn total_len(&self) -> usize {
+        self.remaining
+            .saturating_add(self.pending.len().saturating_sub(self.pending_pos))
+    }
+
     /// 尽量把 `buf` 填满，返回实际写入字节数。返回 0 表示已到末尾。
+    ///
+    /// SXDffle 0.261146：上限是 `remaining + pending 剩余`，**不是** `remaining`。
+    ///
+    /// `remaining` 只统计「压缩流里还没读出来的部分」，构造时为了量 SWF 头
+    /// 长度已经先读了 128 字节，其中 `offset..` 那段躺在 `pending` 里 ——
+    /// 只按 `remaining` 截断会让**末尾固定少 `n - offset` 字节**（实测 115），
+    /// 而 SWF 末尾正好是 `End` tag：解析到一半就 EOF，满屏
+    /// `Unknown tag code`，进游戏黑屏。
     pub fn read_into(&mut self, buf: &mut [u8]) -> usize {
-        let want = buf.len().min(self.remaining);
+        let pending_left = self.pending.len().saturating_sub(self.pending_pos);
+        let want = buf.len().min(self.remaining.saturating_add(pending_left));
         if want == 0 {
             return 0;
         }
         let mut written = 0;
+        let mut from_pending = 0usize;
 
-        let avail = self.pending.len().saturating_sub(self.pending_pos);
-        if avail > 0 {
-            let n = avail.min(want);
+        if pending_left > 0 {
+            let n = pending_left.min(want);
             buf[..n].copy_from_slice(&self.pending[self.pending_pos..self.pending_pos + n]);
             self.pending_pos += n;
             written += n;
+            from_pending = n;
             if self.pending_pos >= self.pending.len() {
                 self.pending.clear();
                 self.pending_pos = 0;
@@ -2735,7 +2763,8 @@ impl SwfBodyDecoder {
             }
         }
 
-        self.remaining -= written;
+        // 只有从压缩流读出来的那部分才扣 `remaining`；`pending` 早就算过了。
+        self.remaining = self.remaining.saturating_sub(written - from_pending);
         written
     }
 }
@@ -2751,6 +2780,32 @@ pub fn parse_header_ext(
     uncompressed_len: i32,
 ) -> Result<HeaderExt> {
     let mut reader = Reader::new(data, version);
+    let _ = reader.read_rectangle()?;
+    let _ = reader.read_fixed8()?;
+    let _ = reader.read_u16()?;
+    let offset = (reader.as_slice().as_ptr() as usize).saturating_sub(data.as_ptr() as usize);
+    parse_header_ext_from_parts(
+        data.get(..offset).unwrap_or(&[]),
+        data.get(offset..).unwrap_or(&[]),
+        compression,
+        version,
+        uncompressed_len,
+    )
+}
+
+/// 从「已经拆开的头」+「tag stream 开头」构造扩展头。
+///
+/// 窗口存储只持有 tag stream，SWF 头那几十字节在量长度时就被消费掉了，
+/// 所以必须分开喂进来 —— 否则会把 tag stream 的头几个字节当成 RECT 解析，
+/// `stage_size` / `num_frames` 全是垃圾，直接黑屏。
+pub fn parse_header_ext_from_parts(
+    header_bytes: &[u8],
+    body: &[u8],
+    compression: Compression,
+    version: u8,
+    uncompressed_len: i32,
+) -> Result<HeaderExt> {
+    let mut reader = Reader::new(header_bytes, version);
     let stage_size = reader.read_rectangle()?;
     let frame_rate = reader.read_fixed8()?;
     let num_frames = reader.read_u16()?;
@@ -2762,8 +2817,6 @@ pub fn parse_header_ext(
         num_frames,
     };
 
-    let offset = (reader.as_slice().as_ptr() as usize).saturating_sub(data.as_ptr() as usize);
-    let body = data.get(offset..).unwrap_or(&[]);
     let mut reader = Reader::new(body, version);
 
     let mut tag = reader.read_tag();

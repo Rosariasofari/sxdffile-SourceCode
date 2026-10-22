@@ -46,6 +46,9 @@ const MAX_LEN: usize = 128 * 1024 * 1024;
 /// 页大小。Android/Linux 上 4KB 是唯一需要关心的。
 const PAGE: usize = 4096;
 
+/// SWF 文件头长度：3 字节签名 + 1 字节版本 + 4 字节解压总长。
+const FILE_HEADER_LEN: usize = 8;
+
 // ---- 统计 ----
 static STORES: AtomicU64 = AtomicU64::new(0);
 static MAPPED_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -133,12 +136,17 @@ impl SwfStore {
     /// 只解压开头一小段用于解析文件头，其余部分等真正被读到时再解压。
     pub fn new(raw: Arc<Vec<u8>>) -> swf::error::Result<(Arc<Self>, HeaderExt)> {
         let mut decoder = SwfBodyDecoder::new(raw.clone())?;
-        let len = decoder.remaining().min(MAX_LEN);
+        // 总长要用 `total_len()`：构造时已经读进 `pending` 的那几十字节
+        // 也属于 tag stream，用 `remaining()` 会把它漏掉。
+        let len = decoder.total_len().min(MAX_LEN);
 
         // 未压缩的 SWF（FWS）：解压流就是文件本身，`raw` 已经是全量数据。
         // 再映射一块同样大小的地方纯属浪费 —— 直接借用。
         let region = if decoder.compression == swf::Compression::None {
-            Region::Borrowed(raw.clone(), decoder.data_offset)
+            // `raw` 是**完整文件**（含 8 字节文件头），tag stream 在
+            // `8 + data_offset` 处 —— 少加 8 会让整个切片前移 8 字节，
+            // 表现就是满屏 `Unknown tag code` + 尾部 EOF。
+            Region::Borrowed(raw.clone(), FILE_HEADER_LEN + decoder.data_offset)
         } else {
             match MmapMut::map_anon(len.max(1)) {
                 Ok(m) => {
@@ -173,7 +181,8 @@ impl SwfStore {
             }
         }
 
-        let header = swf::read::parse_header_ext(
+        let header = swf::read::parse_header_ext_from_parts(
+            &decoder.header_bytes,
             unsafe { std::slice::from_raw_parts(region.ptr(), filled) },
             decoder.compression,
             decoder.version,
@@ -469,6 +478,44 @@ mod tests {
         let (store, _header) = SwfStore::new(raw).unwrap();
         let _ = store.slice(0, store.len());
         // 整部都小于 KEEP_HEAD，逐出应该什么都不做。
+        assert_eq!(store.evict(), 0);
+    }
+
+    /// 和 `decompress_swf` 对照：窗口存储给出的字节必须**完全一致**。
+    ///
+    /// 这条是 0.261145 黑屏的直接回归测试 —— 上一版把 tag stream 总长算少了
+    /// 115 字节（漏掉 `pending`），切片自洽所以其它测试全过，
+    /// 但真实解析会在尾部 EOF。
+    #[test]
+    fn matches_reference_decompression() {
+        for body in [64 * 1024usize, 300 * 1024, 1024 * 1024] {
+            let raw = build_swf(body);
+            let reference = swf::read::decompress_swf(&raw[..]).unwrap();
+            let (store, _header) = SwfStore::new(Arc::new(raw)).unwrap();
+
+            assert_eq!(store.len(), reference.data.len(), "长度不一致 body={body}");
+        }
+    }
+
+    /// 未压缩（FWS）走借用路径，同样要和参考实现一致。
+    #[test]
+    fn matches_reference_for_uncompressed() {
+        let mut v = Vec::new();
+        let body_len = 200 * 1024usize;
+        v.extend_from_slice(b"FWS");
+        v.push(6);
+        v.extend_from_slice(&((body_len + 8) as u32).to_le_bytes());
+        v.extend_from_slice(&[0x78, 0, 0, 0, 0, 0, 0, 0, 0]);
+        v.extend_from_slice(&[0x00, 0x18]);
+        v.extend_from_slice(&[0x01, 0x00]);
+        v.resize(body_len + 8, 0xFF);
+
+        let reference = swf::read::decompress_swf(&v[..]).unwrap();
+        let (store, _header) = SwfStore::new(Arc::new(v)).unwrap();
+
+        assert_eq!(store.len(), reference.data.len());
+        assert_eq!(store.slice(0, store.len()), &reference.data[..]);
+        // 未压缩直接借用，逐出无收益。
         assert_eq!(store.evict(), 0);
     }
 
