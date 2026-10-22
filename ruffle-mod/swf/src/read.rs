@@ -2593,6 +2593,240 @@ pub fn read_compression_type<R: Read>(mut input: R) -> Result<Compression> {
     Ok(compression)
 }
 
+
+// ---- SXDffle 0.261145：流式解压 ----
+//
+// `decompress_swf` 会一次性把整个 tag stream 读进 `Vec`，调用方拿到的是
+// 「已经完整解压的一大块」。战报一次载入 500 多部电影、解压后 700MB 以上，
+// 这些字节全部同时躺在内存里 —— 哪怕其中绝大部分当时根本不会被读。
+//
+// `SwfBodyDecoder` 把解压变成可拉取的流：调用方要 N 字节，它才解压 N 字节。
+// 窗口存储（`ruffle_common::swf_store`）据此按 256KB 前进，并能把用过的窗口
+// 整段丢掉、需要时从原始压缩字节重新走一遍。
+
+/// 把 `Arc<Vec<u8>>` 包成 `Read`，重放时不必拷贝整份 SWF。
+struct ArcCursor {
+    data: std::sync::Arc<Vec<u8>>,
+    pos: usize,
+}
+
+impl Read for ArcCursor {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self.data.len().saturating_sub(self.pos);
+        let n = left.min(buf.len());
+        if n == 0 {
+            return Ok(0);
+        }
+        buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+        self.pos += n;
+        Ok(n)
+    }
+}
+
+/// 流式 SWF 解压器。
+pub struct SwfBodyDecoder {
+    stream: Box<dyn Read + Send>,
+    /// 已从 `stream` 读出、但还没交付的字节。
+    pending: Vec<u8>,
+    pending_pos: usize,
+    /// tag stream 还剩多少字节没交付。
+    remaining: usize,
+    /// SWF 头在解压流里的长度（tag stream 从这之后开始）。
+    pub data_offset: usize,
+    /// 压缩格式。
+    pub compression: Compression,
+    /// SWF 版本。
+    pub version: u8,
+    /// 头里声明的解压总长（含 8 字节头）。
+    pub uncompressed_len: i32,
+}
+
+impl SwfBodyDecoder {
+    /// 构造解压器。`input` 是完整的 SWF 文件字节（含 3+5 字节头）。
+    ///
+    /// 返回时已经跳过 SWF 头，`remaining()` 即 tag stream 长度。
+    pub fn new(input: std::sync::Arc<Vec<u8>>) -> Result<Self> {
+        let mut cur = ArcCursor {
+            data: input,
+            pos: 0,
+        };
+        let compression = read_compression_type(&mut cur)?;
+
+        let mut raw_header = [0u8; 5];
+        cur.read_exact(&mut raw_header)?;
+        let version = raw_header[0];
+        let uncompressed_len = u32::from_le_bytes(*raw_header.split_last_chunk::<4>().unwrap().1);
+        if version == 0 {
+            return Err(Error::invalid_data("Invalid SWF version"));
+        }
+        let body_len = uncompressed_len
+            .checked_sub(8)
+            .ok_or_else(|| Error::invalid_data("Malformed SWF length"))? as usize;
+
+        let mut stream: Box<dyn Read + Send> = match compression {
+            Compression::None => Box::new(cur),
+            Compression::Zlib => make_zlib_reader_send(cur)?,
+            Compression::Lzma => make_lzma_reader_send(cur, body_len)?,
+        };
+
+        // 量出 SWF 头长度：RECT 是变长的，不解析就不知道 tag stream 从哪开始。
+        let mut head = [0u8; 128];
+        let mut n = 0;
+        while n < head.len() {
+            match stream.read(&mut head[n..]) {
+                Ok(0) => break,
+                Ok(k) => n += k,
+                Err(_) => break,
+            }
+        }
+        let mut r = Reader::new(&head[..n], version);
+        let _ = r.read_rectangle()?;
+        let _ = r.read_fixed8()?;
+        let _ = r.read_u16()?;
+        let offset = (r.as_slice().as_ptr() as usize).saturating_sub(head.as_ptr() as usize);
+
+        let offset = offset.min(n).min(body_len);
+        let pending = head[offset..n].to_vec();
+        let pending_len = pending.len();
+        let remaining = body_len.saturating_sub(offset).saturating_sub(pending_len);
+
+        Ok(Self {
+            stream,
+            pending,
+            pending_pos: 0,
+            remaining,
+            data_offset: offset,
+            compression,
+            version,
+            uncompressed_len: uncompressed_len as i32,
+        })
+    }
+
+    /// tag stream 还有多少字节没交付。
+    pub fn remaining(&self) -> usize {
+        self.remaining
+    }
+
+    /// 尽量把 `buf` 填满，返回实际写入字节数。返回 0 表示已到末尾。
+    pub fn read_into(&mut self, buf: &mut [u8]) -> usize {
+        let want = buf.len().min(self.remaining);
+        if want == 0 {
+            return 0;
+        }
+        let mut written = 0;
+
+        let avail = self.pending.len().saturating_sub(self.pending_pos);
+        if avail > 0 {
+            let n = avail.min(want);
+            buf[..n].copy_from_slice(&self.pending[self.pending_pos..self.pending_pos + n]);
+            self.pending_pos += n;
+            written += n;
+            if self.pending_pos >= self.pending.len() {
+                self.pending.clear();
+                self.pending_pos = 0;
+            }
+        }
+
+        while written < want {
+            match self.stream.read(&mut buf[written..want]) {
+                Ok(0) => break,
+                Ok(k) => written += k,
+                Err(_) => break,
+            }
+        }
+
+        self.remaining -= written;
+        written
+    }
+}
+
+/// 只解析 SWF 头（RECT / 帧率 / 帧数 / FileAttributes / SetBackgroundColor）。
+///
+/// 与 `decompress_swf` 的区别：`data` 只要够覆盖开头几个 tag 就行，
+/// 不需要整部 SWF。窗口存储用它避免「为了拿 header 而全量解压」。
+pub fn parse_header_ext(
+    data: &[u8],
+    compression: Compression,
+    version: u8,
+    uncompressed_len: i32,
+) -> Result<HeaderExt> {
+    let mut reader = Reader::new(data, version);
+    let stage_size = reader.read_rectangle()?;
+    let frame_rate = reader.read_fixed8()?;
+    let num_frames = reader.read_u16()?;
+    let header = Header {
+        compression,
+        version,
+        stage_size,
+        frame_rate,
+        num_frames,
+    };
+
+    let offset = (reader.as_slice().as_ptr() as usize).saturating_sub(data.as_ptr() as usize);
+    let body = data.get(offset..).unwrap_or(&[]);
+    let mut reader = Reader::new(body, version);
+
+    let mut tag = reader.read_tag();
+    let file_attributes = if let Ok(Tag::FileAttributes(attributes)) = tag {
+        tag = reader.read_tag();
+        attributes
+    } else {
+        FileAttributes::default()
+    };
+
+    let mut background_color = None;
+    for _ in 0..2 {
+        if let Ok(Tag::SetBackgroundColor(color)) = tag {
+            background_color = Some(color);
+            break;
+        }
+        tag = reader.read_tag();
+    }
+
+    Ok(HeaderExt {
+        header,
+        file_attributes,
+        background_color,
+        uncompressed_len,
+    })
+}
+
+#[cfg(feature = "flate2")]
+fn make_zlib_reader_send<R: Read + Send + 'static>(input: R) -> Result<Box<dyn Read + Send>> {
+    use flate2::read::ZlibDecoder;
+    Ok(Box::new(ZlibDecoder::new(input)))
+}
+
+#[cfg(not(feature = "flate2"))]
+fn make_zlib_reader_send<R: Read + Send + 'static>(_input: R) -> Result<Box<dyn Read + Send>> {
+    Err(Error::unsupported(
+        "Support for Zlib compressed SWFs is not enabled.",
+    ))
+}
+
+/// LZMA 必须知道完整长度才能解，且 lzma reader 不是 `Send`；
+/// 这类 SWF 极少，整块解压后包成 `Cursor` 即可。
+#[cfg(feature = "lzma")]
+fn make_lzma_reader_send<R: Read + 'static>(
+    input: R,
+    body_len: usize,
+) -> Result<Box<dyn Read + Send>> {
+    let mut buf = Vec::with_capacity(body_len.min(MAX_DATA_CAPACITY as usize));
+    let mut r = make_lzma_reader(input, body_len as u32)?;
+    let _ = r.read_to_end(&mut buf);
+    Ok(Box::new(io::Cursor::new(buf)))
+}
+
+#[cfg(not(feature = "lzma"))]
+fn make_lzma_reader_send<R: Read + 'static>(
+    _input: R,
+    _body_len: usize,
+) -> Result<Box<dyn Read + Send>> {
+    Err(Error::unsupported(
+        "Support for LZMA compressed SWFs is not enabled.",
+    ))
+}
+
 #[cfg(test)]
 #[expect(clippy::unusual_byte_groupings)]
 pub mod tests {

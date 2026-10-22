@@ -636,7 +636,8 @@ impl<'gc> MovieClip<'gc> {
             // `preload` 是每个 sprite 各调一次的，子 sprite 的范围是 [start>0, end<全片]，
             // 只有覆盖整片的根 clip 才允许把电影标记成已加载（0.261108 的闪退就是
             // 子 sprite 抢先标记、字节被提前释放，随后满屏 #1009）。
-            let full_len = self.movie().data().len();
+            // SXDffle：只要长度，不要触发整部解压。
+            let full_len = self.movie().data_len();
             if shared.swf_data.start == 0 && shared.swf_data.end >= full_len {
                 self.movie().mark_loaded();
             }
@@ -1228,7 +1229,7 @@ impl<'gc> MovieClip<'gc> {
         if self.is_root() {
             compressed_movie_size as u32
         } else {
-            let uncompressed_movie_size = movie.data().len();
+            let uncompressed_movie_size = movie.data_len();
             let uncompressed_clip_size = self.tag_stream_len() as u32;
 
             (uncompressed_clip_size as f64 * compressed_movie_size as f64

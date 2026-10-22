@@ -119,7 +119,7 @@ impl MovieListWindow {
                                 });
 
                                 row.col(|ui| {
-                                    if movie.data().is_empty() {
+                                    if movie.data_len() == 0 {
                                         ui.weak("(Empty)");
                                     } else if ui.button("Save File...").clicked() {
                                         save_swf(movie, messages);
@@ -224,7 +224,7 @@ impl MovieWindow {
     }
 
     fn show_information(&mut self, ui: &mut Ui, movie: SwfMovie, messages: &mut Vec<Message>) {
-        if !movie.data().is_empty() && ui.button("Save File...").clicked() {
+        if movie.data_len() > 0 && ui.button("Save File...").clicked() {
             save_swf(movie, messages);
         }
 

@@ -2666,6 +2666,16 @@ impl Player {
     /// 根 SWF（游戏本体）永远跳过：它是唯一一部「只要有进程就一定在用」的电影，
     /// `loaderInfo.bytes`、某些 `getDefinition` 兜底路径都可能回头要它，
     /// 而它只有几 MB，留着换确定性。
+    /// SXDffle 0.261145：只逐出解压窗口，不动库表。
+    pub fn evict_resident_data(&self, idle_secs: u32) -> (usize, usize) {
+        self.enter_arena(|_, gc_root, _| {
+            let root = gc_root.root_swf;
+            gc_root
+                .library
+                .evict_resident_data(idle_secs, Some(root))
+        })
+    }
+
     pub fn release_cold_movie_data(&self, idle_secs: u32) -> (usize, usize) {
         self.enter_arena(|_, gc_root, _| {
             let root = gc_root.root_swf;

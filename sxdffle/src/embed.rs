@@ -1954,6 +1954,34 @@ fn render_thread(
                     } else {
                         SWEEP_IDLE_SWF_IDLE_SECS
                     };
+                    // SXDffle 0.261145：窗口解压上线后，「丢字节」变成可逆操作 ——
+                    // 下次读 tag 会从压缩字节重放回来。所以内存一高就先把解压窗口丢掉，
+                    // 不动库表（角色 / 纹理 / 时间轴都留着），比等 45 秒再摘库安全得多。
+                    //
+                    // 判据只看 `last_active`：正在播的部每帧都会推进时间轴，
+                    // 不会被误伤；加载完但在后台待命的部 2~10 秒后就放掉。
+                    let (en, eb, idle_ev) = if rss_now >= 3300 {
+                        let ev_idle = if rss_now >= 4000 {
+                            2
+                        } else if rss_now >= 3600 {
+                            5
+                        } else {
+                            10
+                        };
+                        let (n, b) = pl.evict_resident_data(ev_idle);
+                        (n, b, ev_idle)
+                    } else {
+                        (0, 0, 0)
+                    };
+                    if eb > 0 {
+                        log::info!(
+                            "SXDffle embed: 逐出解压窗口 {} 部 / {}MB（idle {}s · RSS {}MB）",
+                            en,
+                            eb / (1024 * 1024),
+                            idle_ev,
+                            rss_now
+                        );
+                    }
                     let (sn, sb) = pl.sweep_idle_movies(idle);
                     drop(pl);
                     if sn > 0 {
@@ -2120,10 +2148,20 @@ fn render_thread(
                 // try_lock：这段代码在监控线程里跑，拿不到就跳过，不能阻塞渲染。
                 if let Ok(p) = player.try_lock() {
                     let (mv_n, mv_b) = p.movie_resident_stats();
+                    // 窗口存储的账：映射了多少虚拟地址、实际驻留多少、逐出/重放各多少次。
+                    // 重放次数是这套机制的代价指标 —— 每秒几十次说明窗口丢得太狠。
+                    let (st_n, st_map, st_replay, st_us, st_evict, st_evict_b) =
+                        ruffle_common::swf_store::swf_store_stats();
                     log::info!(
-                        "SXDffle embed: SWF 数据常驻 {} 部 / {}MB（movie_libraries 只增不减）",
+                        "SXDffle embed: SWF 数据常驻 {} 部 / {}MB · 窗口 {} 部/映射 {}MB · 逐出 {} 次/{}MB · 重放 {} 次/{}ms",
                         mv_n,
-                        mv_b / (1024 * 1024)
+                        mv_b / (1024 * 1024),
+                        st_n,
+                        st_map / (1024 * 1024),
+                        st_evict,
+                        st_evict_b / (1024 * 1024),
+                        st_replay,
+                        st_us / 1000
                     );
                 }
                 // 大块分配来源：64K 以上的 1900 次分配合计 688MB，

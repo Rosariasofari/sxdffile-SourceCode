@@ -405,7 +405,7 @@ impl<'gc> MovieLibraries<'gc> {
     fn resident_stats(&self) -> (usize, usize) {
         self.0
             .iter()
-            .fold((0, 0), |(n, b), (movie, _)| (n + 1, b + movie.data().len()))
+            .fold((0, 0), |(n, b), (movie, _)| (n + 1, b + movie.data_len()))
     }
 
     /// 目前不可用：库与角色之间是自环（库→MovieClip→SwfMovie），
@@ -565,6 +565,47 @@ impl<'gc> Library<'gc> {
         (n, bytes)
     }
 
+    /// SXDffle 0.261145：内存压力下的**只逐出字节**路径。
+    ///
+    /// 与 `sweep_idle_movies` 的区别：
+    /// - 不动库表，角色/纹理都留着，只是把解压窗口还给系统；
+    /// - 判据只看 `last_active`（时间轴有没有推进），不看 `last_used`：
+    ///   库查表只返回角色，并不代表马上要读 tag 字节；
+    /// - 丢掉的字节下次真被读时会从压缩字节重放，所以不会缺帧。
+    ///
+    /// 返回 (电影数, 释放字节)。
+    pub fn evict_resident_data(
+        &self,
+        idle_secs: u32,
+        exclude: Option<SwfMovie<'gc>>,
+    ) -> (usize, usize) {
+        let now = SwfMovieData::now_secs();
+        let mut n = 0usize;
+        let mut bytes = 0usize;
+        for movie in self.movie_libraries.known_movies() {
+            if let Some(ex) = exclude
+                && SwfMovie::ptr_eq(&movie, &ex)
+            {
+                continue;
+            }
+            if !movie.is_loaded() {
+                continue;
+            }
+            // 取「时间轴推进」和「真的读过字节」两者的较大值：
+            // 前者只在帧开头打点，后者每读一个 tag 都刷新。
+            let last = movie.last_active_secs().max(movie.last_store_use_secs());
+            if now.saturating_sub(last) < idle_secs {
+                continue;
+            }
+            let freed = movie.evict_data();
+            if freed > 0 {
+                n += 1;
+                bytes += freed;
+            }
+        }
+        (n, bytes)
+    }
+
     /// SXDffle：统计还有多少部电影的解压字节仍在内存里。
     pub fn resident_movie_data(&self) -> (usize, usize) {
         let mut n = 0usize;
@@ -572,7 +613,7 @@ impl<'gc> Library<'gc> {
         for movie in self.movie_libraries.known_movies() {
             if !movie.is_data_released() {
                 n += 1;
-                bytes += movie.data().len();
+                bytes += movie.resident_len();
             }
         }
         (n, bytes)

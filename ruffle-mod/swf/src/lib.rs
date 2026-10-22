@@ -28,7 +28,7 @@ pub mod write;
 mod test_data;
 
 /// Re-exports
-pub use read::{decompress_swf, parse_swf};
+pub use read::{decompress_swf, parse_header_ext, parse_swf, SwfBodyDecoder};
 pub use string::*;
 pub use tag_code::TagCode;
 pub use types::*;

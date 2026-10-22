@@ -1,4 +1,5 @@
 use crate::sandbox::SandboxType;
+use crate::swf_store::SwfStore;
 
 use gc_arena::{Collect, Gc, GcWeak, Mutation};
 use std::fmt::{Debug, Formatter};
@@ -37,16 +38,16 @@ pub fn swf_load_stats() -> (usize, usize, usize) {
 
 impl<'gc> SwfMovie<'gc> {
     pub fn new(mc: &Mutation<'gc>, data: SwfMovieData) -> Self {
-        if data.is_movie && !data.data().is_empty() {
+        if data.is_movie && data.data_len() > 0 {
             use std::sync::atomic::Ordering::Relaxed;
             SWF_LOADED_COUNT.fetch_add(1, Relaxed);
             SWF_LOADED_COMPRESSED.fetch_add(data.compressed_len(), Relaxed);
-            SWF_LOADED_RAW.fetch_add(data.data().len(), Relaxed);
+            SWF_LOADED_RAW.fetch_add(data.data_len(), Relaxed);
             tracing::info!(
-                "SXDffle SWF 载入: {} 压缩 {}KB → 解压 {}KB",
+                "SXDffle SWF 载入: {} 压缩 {}KB → 解压 {}KB（窗口化）",
                 data.url(),
                 data.compressed_len() / 1024,
-                data.data().len() / 1024
+                data.data_len() / 1024
             );
         }
         SwfMovie(Gc::new(mc, data))
@@ -107,21 +108,6 @@ impl<'gc> SwfMovieWeak<'gc> {
 }
 
 
-/// SXDffle：构造 SWF 字节存储。
-pub(crate) fn new_data_store(
-    bytes: Vec<u8>,
-) -> Arc<std::sync::Mutex<Option<Arc<Vec<u8>>>>> {
-    Arc::new(std::sync::Mutex::new(Some(Arc::new(bytes))))
-}
-
-static EMPTY_SWF: std::sync::OnceLock<Arc<Vec<u8>>> = std::sync::OnceLock::new();
-
-fn empty_swf() -> Arc<Vec<u8>> {
-    EMPTY_SWF
-        .get_or_init(|| Arc::new(Vec::new()))
-        .clone()
-}
-
 /// An open, fully parsed SWF movie ready to play back, either in a Player or a
 /// MovieClip.
 #[derive(Clone, Collect)]
@@ -132,11 +118,16 @@ pub struct SwfMovieData {
 
     /// Uncompressed SWF data.
     ///
-    /// SXDffle：外层 `Arc` 让所有 clone 共享同一份存储；`Mutex<Option<..>>`
-    /// 让字节可以在 preload 完成后被丢掉。
-    /// 战报会加载 900 多部电影、解压后近 900MB，而同一时刻只有几部在播 ——
-    /// 这些字节是最大的单项常驻内存，也是「退回宗门不降内存」的根。
-    data: Arc<std::sync::Mutex<Option<Arc<Vec<u8>>>>>,
+    /// SXDffle 0.261145：改成窗口化的 `SwfStore`。
+    ///
+    /// 原来是 `Arc<Mutex<Option<Arc<Vec<u8>>>>>` —— 一整块解压数据。
+    /// 问题在于 `SwfSlice` 也持有那个 `Arc`，所以「电影丢字节」只是把
+    /// `SwfMovieData` 手上那份引用去掉，内存并不会还给系统：
+    /// 实测战报里 558 部 / 714MB 三分钟一动不动，只有整个 MovieClip 被回收时才降。
+    ///
+    /// `SwfStore` 只保留压缩字节 + 一块可逐出的映射区，`SwfSlice` 持有的是
+    /// 这个存储的 `Arc`（小对象），所以字节可以随时丢、需要时再解压回来。
+    store: Arc<SwfStore>,
     /// 该电影是否已经整片 preload 完成（完成前绝不能丢字节）。
     loaded: Arc<std::sync::atomic::AtomicBool>,
     /// 最近一次被库访问的「进程内秒数」，用于判断「冷」。
@@ -196,7 +187,7 @@ impl SwfMovieData {
         let sandbox_type = SandboxType::infer(url.as_str(), &header);
         Self {
             header,
-            data: new_data_store(Vec::new()),
+            store: SwfStore::empty(),
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -229,7 +220,7 @@ impl SwfMovieData {
         Self {
             header,
             compressed_len,
-            data: new_data_store(Vec::new()),
+            store: SwfStore::empty(),
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -259,7 +250,11 @@ impl SwfMovieData {
         Self {
             header,
             compressed_len: compressed_data.len(),
-            data: new_data_store(compressed_data),
+            // 图片伪电影：尽力解析，失败就用空存储（它只为 `loaderInfo.bytes` 服务）。
+            store: SwfStore::new(Arc::new(compressed_data)).map_or_else(
+                |_| SwfStore::empty(),
+                |(store, _)| store,
+            ),
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -286,7 +281,7 @@ impl SwfMovieData {
         let sandbox_type = SandboxType::infer(movie_url.as_str(), &header);
         Self {
             header,
-            data: new_data_store(Vec::new()),
+            store: SwfStore::empty(),
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -312,12 +307,16 @@ impl SwfMovieData {
         load_bytes_info: Option<LoadBytesInfo>,
     ) -> Result<Self, swf::error::Error> {
         let compressed_len = swf_data.len();
-        // SXDffle：解压出来的整块 SWF 字节会**永久常驻**（挂在 SwfMovieData 上，
-        // 不受 GC 管理），它的归属必须精确：战报一次加载 400 部 SWF、797MB，
-        // 过去这些字节被记进「其他」，看起来像来路不明的大块。
+        // SXDffle 0.261145：不再整块解压。
+        //
+        // 原来这里 `decompress_swf` 把整部 SWF 解压成一个 `Vec` 并永久常驻，
+        // 战报 500 多部电影就是 700MB 以上；而且 `SwfSlice` 持有同一个 `Arc`，
+        // 于是「丢弃字节」实际不生效（实测 558 部 / 714MB 三分钟不动）。
+        // 改为窗口存储：只解压到够解析文件头，其余按 256KB 窗口在真正被读到时展开。
         let _sxd_tag = crate::alloc_tag::Guard::new(1);
-        let swf_buf = swf::read::decompress_swf(swf_data)?;
-        let encoding = swf::SwfStr::encoding_for_version(swf_buf.header.version());
+        let raw = Arc::new(swf_data.to_vec());
+        let (store, header) = SwfStore::new(raw)?;
+        let encoding = swf::SwfStr::encoding_for_version(header.version());
 
         // The loader SWF has full control over the tags of a SWF loaded using
         // `Loader.loadBytes`, so if we were to use the sandbox type declared in
@@ -326,11 +325,11 @@ impl SwfMovieData {
         // a child SWF with different sandboxing.
         let sandbox_type = load_bytes_info
             .map(|i| i.loader_sandbox_type)
-            .unwrap_or_else(|| SandboxType::infer(url.as_str(), &swf_buf.header));
+            .unwrap_or_else(|| SandboxType::infer(url.as_str(), &header));
 
         let mut movie = Self {
-            header: swf_buf.header,
-            data: new_data_store(swf_buf.data),
+            header,
+            store,
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -363,7 +362,7 @@ impl SwfMovieData {
         let sandbox_type = SandboxType::infer(url.as_str(), &header);
         let mut movie = Self {
             header,
-            data: new_data_store(Vec::new()),
+            store: SwfStore::empty(),
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
@@ -406,17 +405,52 @@ impl SwfMovieData {
         self.header.version()
     }
 
-    /// SXDffle：返回共享句柄而不是 `&[u8]`。
+    /// 解压后的 tag stream（全量）。
     ///
-    /// 字节可能已经被 `try_release_data` 丢弃，此时拿到空切片。
-    /// 调用方必须能接受「空」——真正依赖字节的只有 preload、视频和
-    /// `loaderInfo.bytes`，前两者都在 `loaded` 之前完成，后者游戏不用。
-    pub fn data(&self) -> Arc<Vec<u8>> {
-        self.data
-            .lock()
-            .ok()
-            .and_then(|g| g.clone())
-            .unwrap_or_else(empty_swf)
+    /// SXDffle 0.261145：**会触发整部解压**，只留给确实需要整份字节的路径
+    /// （保存 SWF、视频帧）。只关心长度的调用方请用 [`Self::data_len`]，
+    /// 只关心某一段的请用 [`Self::slice`]。
+    pub fn data(&self) -> &[u8] {
+        self.store.slice(0, self.store.len())
+    }
+
+    /// tag stream 的长度。不触发解压。
+    #[inline]
+    pub fn data_len(&self) -> usize {
+        self.store.len()
+    }
+
+    /// 区间视图。只解压到 `end` 为止，不会整部展开。
+    #[inline]
+    pub fn slice(&self, start: usize, end: usize) -> &[u8] {
+        self.store.slice(start, end)
+    }
+
+    /// 整片 preload 是否已经完成。
+    #[inline]
+    pub fn is_loaded(&self) -> bool {
+        self.loaded.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 最近一次时间轴推进的「进程内秒数」。
+    #[inline]
+    pub fn last_active_secs(&self) -> u32 {
+        self.last_active.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// 最近一次真正读字节的「进程内秒数」。
+    #[inline]
+    pub fn last_store_use_secs(&self) -> u32 {
+        self.store.last_use_secs()
+    }
+
+    /// 立刻逐出解压窗口（不看 idle）。
+    ///
+    /// SXDffle：这是窗口存储才有的能力 —— 字节丢了能重放回来，
+    /// 所以调用方只需要判断「现在还要不要读 tag」，不必担心丢过头。
+    #[inline]
+    pub fn evict_data(&self) -> usize {
+        self.store.evict()
     }
 
     /// 标记整片 preload 完成。此后字节才可以被回收。
@@ -443,10 +477,17 @@ impl SwfMovieData {
             .store(Self::now_secs(), std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// 丢弃解压字节，返回释放的字节数（0 表示没动）。
+    /// 丢弃解压数据（保留头部窗口），返回释放的字节数。
     ///
-    /// 只有当字节没有别的持有者（`SwfSlice`/视频帧）时才会真的释放，
-    /// 否则原样放回 —— 这样「正在被使用」的电影永远不会被误伤。
+    /// SXDffle 0.261145：现在是真的释放。
+    ///
+    /// 旧实现把 `Arc<Vec<u8>>` 从 `Mutex<Option<..>>` 里 `take()` 出来，
+    /// 但每个 `MovieClipShared` 的 `SwfSlice` 都持有同一个 `Arc` ——
+    /// 引用计数永远 ≥ 2，字节一个都掉不了（实测 558 部 / 714MB 三分钟不动）。
+    ///
+    /// 窗口存储下 `SwfSlice` 持有的是 `Arc<SwfStore>`（小对象），
+    /// 逐出的是 `SwfStore` 内部的映射区，所以这里 `madvise(MADV_DONTNEED)`
+    /// 之后物理页立刻还给系统；下次真要读，从压缩字节重放即可。
     pub fn try_release_data(&self, now_secs: u32, idle_secs: u32) -> usize {
         use std::sync::atomic::Ordering::Relaxed;
         if !self.loaded.load(Relaxed) {
@@ -455,33 +496,21 @@ impl SwfMovieData {
         if now_secs.saturating_sub(self.last_used.load(Relaxed)) < idle_secs {
             return 0;
         }
-        // 时间轴还在推进就绝对不能丢：下一帧要把 tag 读回来。
+        // 时间轴还在推进就先留着：下一帧要把 tag 读回来，逐出会引起重放。
         if now_secs.saturating_sub(self.last_active.load(Relaxed)) < idle_secs {
             return 0;
         }
-        let Ok(mut guard) = self.data.lock() else {
-            return 0;
-        };
-        let Some(arc) = guard.take() else {
-            return 0;
-        };
-        // SXDffle：不再要求 `strong_count == 1`。
-        //
-        // 每个 `MovieClipShared` 都持有一个 `SwfSlice`（内含 Arc），
-        // 933 部电影就意味着 Arc 计数永远 ≥ 2 —— 加了这条判断的结果是
-        // **一次都没释放过**（0.261107 实测：`回收冷电影字节` 一行都没出现，
-        // SWF 常驻反向涨到 1419 部 / 823MB）。
-        //
-        // 安全性改由另外两层保证：
-        // 1. `loaded` = 整片 preload 已完成，之后不会再读这些字节；
-        // 2. `SwfSlice::data()` / `read_from()` 越界时返回空切片而不是 panic，
-        //    万一有漏网路径，行为是「解析到空 → 立即判定完成」，不会崩。
-        arc.len()
+        self.store.evict()
     }
 
-    /// 是否已丢弃字节。
+    /// 是否已丢弃解压数据（只剩头部窗口）。
     pub fn is_data_released(&self) -> bool {
-        self.data.lock().map(|g| g.is_none()).unwrap_or(false)
+        self.store.resident_len() < self.store.len()
+    }
+
+    /// 当前驻留的字节数（物理内存里真正占着的部分）。
+    pub fn resident_len(&self) -> usize {
+        self.store.resident_len()
     }
 
     /// Returns the suggested string encoding for the given SWF version.
@@ -579,7 +608,8 @@ impl Debug for SwfMovieData {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SwfMovieData")
             .field("header", &self.header)
-            .field("data", &self.data().len())
+            .field("data", &self.data_len())
+            .field("resident", &self.resident_len())
             .field("url", &self.url)
             .field("loader_url", &self.loader_url)
             .field("parameters", &self.parameters)
@@ -595,7 +625,11 @@ impl Debug for SwfMovieData {
 #[derive(Debug, Clone, Collect)]
 #[collect(no_drop)]
 pub struct SwfSlice {
-    entire_data: Arc<Vec<u8>>,
+    /// SXDffle 0.261145：不再持有整块解压字节，只持有窗口存储。
+    ///
+    /// 原来这里是 `Arc<Vec<u8>>`，每个 MovieClip 一份引用，导致
+    /// `SwfMovieData::try_release_data` 永远拿不到独占权、字节放不掉。
+    store: Arc<SwfStore>,
     swf_version: u8,
 
     pub start: usize,
@@ -604,13 +638,9 @@ pub struct SwfSlice {
 
 impl<'gc> From<SwfMovie<'gc>> for SwfSlice {
     fn from(movie: SwfMovie<'gc>) -> Self {
-        // SXDffle：SwfSlice 持有 Arc 会让 strong_count > 1，
-        // 正好阻止 try_release_data 释放「正在被解析的字节」。
-        let entire = movie.data();
-        let end = entire.len();
-
+        let end = movie.store.len();
         Self {
-            entire_data: entire,
+            store: movie.store.clone(),
             swf_version: movie.version(),
             start: 0,
             end,
@@ -630,7 +660,7 @@ impl SwfSlice {
     #[inline]
     pub fn empty(movie: SwfMovie<'_>) -> Self {
         Self {
-            entire_data: movie.data(),
+            store: movie.store.clone(),
             swf_version: movie.version(),
             start: 0,
             end: 0,
@@ -641,7 +671,7 @@ impl SwfSlice {
     #[inline]
     pub fn copy_empty(&self) -> Self {
         Self {
-            entire_data: self.entire_data.clone(),
+            store: self.store.clone(),
             swf_version: self.swf_version,
             start: 0,
             end: 0,
@@ -653,12 +683,13 @@ impl SwfSlice {
     /// This function panics if the given slice is not a subslice of the current
     /// slice.
     pub fn to_subslice(&self, slice: &[u8]) -> Self {
-        let self_pval = self.entire_data.as_ptr() as usize;
+        // 映射区地址固定，所以「子切片相对基址的偏移」仍然是可靠的换算依据。
+        let self_pval = self.store.as_ptr() as usize;
         let slice_pval = slice.as_ptr() as usize;
 
         if (self_pval + self.start) <= slice_pval && slice_pval < (self_pval + self.end) {
             Self {
-                entire_data: self.entire_data.clone(),
+                store: self.store.clone(),
                 swf_version: self.swf_version,
                 start: slice_pval - self_pval,
                 end: (slice_pval - self_pval) + slice.len(),
@@ -673,13 +704,13 @@ impl SwfSlice {
     /// This function allows subslices outside the current slice to be formed,
     /// as long as they are valid subslices of the movie itself.
     pub fn to_unbounded_subslice(&self, slice: &[u8]) -> Self {
-        let self_pval = self.entire_data.as_ptr() as usize;
-        let self_len = self.entire_data.len();
+        let self_pval = self.store.as_ptr() as usize;
+        let self_len = self.store.len();
         let slice_pval = slice.as_ptr() as usize;
 
         if self_pval <= slice_pval && slice_pval < (self_pval + self_len) {
             Self {
-                entire_data: self.entire_data.clone(),
+                store: self.store.clone(),
                 swf_version: self.swf_version,
                 start: slice_pval - self_pval,
                 end: (slice_pval - self_pval) + slice.len(),
@@ -702,16 +733,18 @@ impl SwfSlice {
     }
 
     /// Convert the SwfSlice into a standard data slice.
+    ///
+    /// SXDffle 0.261145：按需解压到 `end`，不会整部展开。
     pub fn data(&self) -> &[u8] {
-        // SXDffle：字节可能已被 `try_release_data` 丢弃（entire_data 变成空 Vec），
-        // 而此时 start/end 仍是原来的范围。用 get 而不是下标，
-        // 越界时返回空切片 —— 让上层「解析到空」自然结束，而不是 panic。
-        self.entire_data.get(self.start..self.end).unwrap_or(&[])
+        self.store.slice(self.start, self.end)
     }
 
     /// Access the entire data of the movie backing this SwfSlice.
+    ///
+    /// 注意：这会解压整部电影。只有 AVM1 的 `seek` 这类确实需要全量基址的
+    /// 路径才该用它。
     pub fn entire_data(&self) -> &[u8] {
-        &self.entire_data
+        self.store.slice(0, self.store.len())
     }
 
     /// Checks if this slice is empty

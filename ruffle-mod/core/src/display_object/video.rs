@@ -319,12 +319,10 @@ impl<'gc> Video<'gc> {
         let res = match self.0.source.get() {
             VideoSource::Swf(swf_source) => match swf_source.frames.borrow().get(&frame_id) {
                 Some((slice_start, slice_end)) => {
-                    // SXDffle：data() 现在返回 Arc 句柄，必须先绑定再切片，
-                    // 否则临时值会被 drop，切片悬垂。
-                    let movie_data = self.0.movie.data();
+                    // SXDffle：只取这一帧的区间，不触发整部解压。
                     let encframe = EncodedFrame {
                         codec: swf_source.streamdef.codec,
-                        data: &movie_data[*slice_start..*slice_end],
+                        data: self.0.movie.slice(*slice_start, *slice_end),
                         frame_id,
                     };
                     context
@@ -393,13 +391,13 @@ impl<'gc> TDisplayObject<'gc> for Video<'gc> {
                     let stream = stream.unwrap();
                     let mut keyframes = BTreeSet::new();
 
-                    let movie_data = movie.data();
                     for (frame_id, (frame_start, frame_end)) in swf_source.frames.borrow().iter() {
                         let dep = context.video.preload_video_stream_frame(
                             stream,
                             EncodedFrame {
                                 codec: streamdef.codec,
-                                data: &movie_data[*frame_start..*frame_end],
+                                // SXDffle：只取这一帧的区间。
+                                data: movie.slice(*frame_start, *frame_end),
                                 frame_id: *frame_id,
                             },
                         );
