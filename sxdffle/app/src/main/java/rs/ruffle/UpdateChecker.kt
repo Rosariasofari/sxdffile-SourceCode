@@ -29,10 +29,10 @@ object UpdateChecker {
 
     /** 下载镜像前缀（拼在原 URL 前面即可）。直连失败后按顺序尝试。 */
     private val MIRRORS = listOf(
-        "",
+        "https://gh-proxy.com/",
         "https://ghfast.top/",
         "https://ghproxy.net/",
-        "https://gh-proxy.com/"
+        "" // 直连放最后：手机网络下 github.com 基本必超时，先试反而白等
     )
 
     data class Release(
@@ -46,7 +46,18 @@ object UpdateChecker {
 
     fun isDownloading(): Boolean = BUSY.get()
 
-    private fun open(url: String, timeoutMs: Int = 8000): HttpURLConnection {
+    /** 更新通道的日志：写进同一个 sxdffle.log，和引擎日志同框，导一次就够。 */
+    fun log(ctx: android.content.Context, msg: String) {
+        try {
+            val dir = ctx.getExternalFilesDir(null) ?: ctx.filesDir
+            val ts = java.text.SimpleDateFormat("MM-dd HH:mm:ss.SSS", java.util.Locale.US)
+                .format(java.util.Date())
+            File(dir, "sxdffle.log").appendText("$ts [UPD] $msg\n")
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun open(url: String, timeoutMs: Int = 6000): HttpURLConnection {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = timeoutMs
         c.readTimeout = timeoutMs
@@ -57,11 +68,12 @@ object UpdateChecker {
     }
 
     /** 查最新版本；网络不通返回 null（调用方负责提示）。 */
-    fun fetchLatest(): Release? {
+    fun fetchLatest(ctx: android.content.Context): Release? {
         // 1) 官方 API
-        for (prefix in listOf("", "https://ghfast.top/", "https://ghproxy.net/")) {
+        for (prefix in listOf("https://gh-proxy.com/", "https://ghfast.top/", "")) {
             try {
                 val c = open(prefix + API)
+                log(ctx, "查询 ${prefix.ifEmpty { "直连" }}${API} …")
                 if (c.responseCode in 200..299) {
                     val body = c.inputStream.bufferedReader().use { it.readText() }
                     val o = JSONObject(body)
@@ -72,6 +84,7 @@ object UpdateChecker {
                         url = assets.getJSONObject(0).optString("browser_download_url")
                     }
                     if (tag.isNotEmpty() && url.isNotEmpty()) {
+                        log(ctx, "远端版本 $tag · 资产 ${url.substringAfterLast('/')}")
                         return Release(tag, url, o.optString("html_url", LATEST_PAGE))
                     }
                 }
@@ -81,7 +94,7 @@ object UpdateChecker {
             }
         }
         // 2) API 全不通：抓 releases/latest 的跳转，从 /tag/vX 里取版本号
-        for (prefix in listOf("", "https://ghfast.top/", "https://ghproxy.net/")) {
+        for (prefix in listOf("https://gh-proxy.com/", "https://ghfast.top/", "")) {
             try {
                 val c = open(prefix + LATEST_PAGE)
                 val finalUrl = c.url.toString()
@@ -96,6 +109,7 @@ object UpdateChecker {
             } catch (_: Exception) {
             }
         }
+        log(ctx, "全部源不可达，检查更新失败")
         return null
     }
 

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知栏小图标：必须是本应用包的资源。
+     用 android.R.drawable.* 时，系统按本包的资源表去解析框架的 ID，
+     轻则图标空白，重则整条通知不显示 —— 这就是「点了更新但通知栏没反应」。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,3L12,13.2L8.6,9.8L7.2,11.2L12.6,16.6L18,11.2L16.6,9.8L13.2,13.2L13.2,3L12,3zM5,18L5,20L19,20L19,18L5,18z" />
+</vector>

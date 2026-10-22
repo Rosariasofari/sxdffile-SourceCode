@@ -3259,12 +3259,24 @@ class BrowserActivity : AppCompatActivity() {
      * 查最新构建。manual=true 时无论结果如何都给反馈；
      * 自动检查（manual=false）只在「确实有新版本」时弹窗，不打扰日常使用。
      */
+    private var updateChecking = false
+
     private fun checkForUpdate(manual: Boolean) {
-        if (manual) showStatus("正在检查更新…")
+        if (manual) {
+            // 连点会同时起好几个线程，每个都在等 6 秒超时，看起来就是「完全没反应」。
+            if (updateChecking) {
+                showStatus("正在检查更新，请稍候…")
+                return
+            }
+            updateChecking = true
+            showStatus("正在检查更新…")
+            logToFile("检查更新（手动）· 当前版本 ${appVersionName()}")
+        }
         Thread {
-            val latest = UpdateChecker.fetchLatest()
+            val latest = UpdateChecker.fetchLatest(this)
             val current = appVersionName()
             runOnUiThread {
+                updateChecking = false
                 if (latest == null) {
                     if (manual) {
                         androidx.appcompat.app.AlertDialog.Builder(this)
@@ -3281,6 +3293,7 @@ class BrowserActivity : AppCompatActivity() {
                     }
                     return@runOnUiThread
                 }
+                logToFile("检查结果：远端 ${latest.version} / 当前 $current")
                 if (UpdateChecker.compare(latest.version, current) <= 0) {
                     if (manual) {
                         androidx.appcompat.app.AlertDialog.Builder(this)
@@ -3317,6 +3330,7 @@ class BrowserActivity : AppCompatActivity() {
             return
         }
         showStatus("开始下载 ${r.version}…（可切后台，进度见通知栏）")
+        logToFile("开始下载 ${r.version} · ${r.assetUrl}")
         // 交给前台服务下载：普通线程会在 APP 切后台时被系统冻结导致断连。
         try {
             val i = android.content.Intent(this, UpdateService::class.java).apply {
@@ -3325,8 +3339,10 @@ class BrowserActivity : AppCompatActivity() {
                 putExtra(UpdateService.EXTRA_VERSION, r.version)
             }
             if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+            logToFile("已请求启动 UpdateService")
         } catch (e: Exception) {
             showStatus("启动下载服务失败：${e.message}")
+            logToFile("启动 UpdateService 失败：${e.javaClass.simpleName} ${e.message}")
         }
     }
 

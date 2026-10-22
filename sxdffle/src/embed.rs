@@ -1936,14 +1936,27 @@ fn render_thread(
                     // （战报播放期间帧一直在走，不会命中），此时把 idle 降到 45 秒，
                     // 让「退回宗门 → 回收」的等待从 180 秒缩到 65 秒左右。
                     let quiet = ruffle_core::sxd_watch::idle_secs();
-                    let idle = if quiet >= 20 { 45 } else { SWEEP_IDLE_SWF_IDLE_SECS };
+                    // 退回宗门后主时间轴一直在动（宗门待机动画就够），
+                    // 「全场静止 20 秒」几乎不会成立，180 秒的闸门于是变成固定的三分钟等待。
+                    // 内存已经偏高时不再等全局静止，按单片 90 秒没被用过就摘。
+                    let rss_now = rss_mb();
+                    let idle = if quiet >= 20 {
+                        45
+                    } else if rss_now >= 3500 {
+                        90
+                    } else {
+                        SWEEP_IDLE_SWF_IDLE_SECS
+                    };
                     let (sn, sb) = pl.sweep_idle_movies(idle);
                     drop(pl);
                     if sn > 0 {
                         log::info!(
-                            "SXDffle embed: 摘除闲置电影库 {} 部 / {}MB（字节+角色+纹理）",
+                            "SXDffle embed: 摘除闲置电影库 {} 部 / {}MB（字节+角色+纹理 · idle {}s · 静止 {}s · RSS {}MB）",
                             sn,
-                            sb / (1024 * 1024)
+                            sb / (1024 * 1024),
+                            idle,
+                            quiet,
+                            rss_now
                         );
                     }
                 }

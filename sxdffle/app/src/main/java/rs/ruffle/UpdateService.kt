@@ -36,10 +36,10 @@ class UpdateService : Service() {
 
         /** 下载镜像前缀，与 UpdateChecker 保持一致。 */
         private val MIRRORS = listOf(
-            "",
+            "https://gh-proxy.com/",
             "https://ghfast.top/",
             "https://ghproxy.net/",
-            "https://gh-proxy.com/"
+            ""
         )
     }
 
@@ -57,6 +57,7 @@ class UpdateService : Service() {
         }
         ensureChannel()
         startForeground(NOTI_ID, buildNotification(version, 0, "准备下载…", true))
+        UpdateChecker.log(this, "前台服务启动 · 版本 $version · 通知已挂出")
         running = true
         Thread { download(url, version) }.start()
         return START_NOT_STICKY
@@ -85,7 +86,9 @@ class UpdateService : Service() {
         apk: File? = null
     ): Notification {
         val b = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_sys_download)
+            // 必须用本包资源：android.R.drawable 的 ID 在本包里解析不到，
+            // 轻则图标空白，重则整条通知不显示。
+            .setSmallIcon(R.drawable.ic_stat_download)
             .setContentTitle("SXDffle 更新 $version")
             .setContentText(text)
             .setOngoing(apk == null)
@@ -136,6 +139,7 @@ class UpdateService : Service() {
                 }
                 if (c.responseCode !in 200..299) {
                     lastErr = "HTTP ${c.responseCode}"
+                    UpdateChecker.log(this, "镜像 ${prefix.ifEmpty { "直连" }} 返回 $lastErr")
                     c.disconnect()
                     continue
                 }
@@ -173,6 +177,7 @@ class UpdateService : Service() {
                     if (dest.exists()) dest.delete()
                     part.renameTo(dest)
                     notify(buildNotification(version, 100, "下载完成，点击安装", false, dest))
+                    UpdateChecker.log(this, "下载完成 ${dest.length() / 1024 / 1024}MB → ${dest.name}")
                     running = false
                     stopForeground(false)
                     stopSelf()
@@ -186,9 +191,10 @@ class UpdateService : Service() {
             }
         }
         running = false
+        UpdateChecker.log(this, "下载失败：$lastErr")
         notify(
             NotificationCompat.Builder(this, CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.stat_notify_error)
+                .setSmallIcon(R.drawable.ic_stat_download)
                 .setContentTitle("SXDffle 更新失败")
                 .setContentText(lastErr)
                 .setAutoCancel(true)
