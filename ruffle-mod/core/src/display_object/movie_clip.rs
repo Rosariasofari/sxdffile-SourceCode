@@ -486,6 +486,8 @@ impl<'gc> MovieClip<'gc> {
     ) -> bool {
         // SXDffle：解析 tag 期间产生的角色/形状/时间轴数据记到「SWF解析」
         let _sxd_tag = crate::alloc_tag::Guard::new(1);
+        // SXDffle：preload 归因（0.261135）。Drop 时归零，覆盖全部返回路径。
+        let _sxd_pre = crate::sxd_watch::PreloadGuard::new();
         let shared = Gc::as_ref(self.0.shared.get());
         let (swf, progress) = (&shared.swf_data, &shared.preload_progress);
 
@@ -525,7 +527,17 @@ impl<'gc> MovieClip<'gc> {
             }
         }
 
+        // SXDffle：preload 归因（0.261135）。
+        //
+        // `decode_tags` 的形态是「回调逐 tag」而不是「read_tag() + match tag」，
+        // 所以插桩点在这个闭包的第一行，计数器也只能放闭包外面。
+        // 计数是**单次 preload 调用**内的 tag 数：这个数字一直涨、函数却迟迟不返回，
+        // 就说明卡在这一片的解析里，而不是卡在某个 tag 的解码上。
+        let mut sxd_done: u32 = 0;
         let tag_callback = |reader: &mut SwfStream<'_>, tag_code| {
+            sxd_done = sxd_done.wrapping_add(1);
+            crate::sxd_watch::note_preload(tag_code as u16, sxd_done);
+
             let tag_len = reader.get_ref().len();
             match tag_code {
                 TagCode::CsmTextSettings => shared.csm_text_settings(context, reader),
@@ -610,6 +622,9 @@ impl<'gc> MovieClip<'gc> {
         shared.import_exports_of_importer(context);
 
         if is_finished {
+            // SXDffle：解析结束，立刻撤销 preload 标记。
+            // `PreloadGuard` 在返回时还会再兜一次，这里是给「日志里最后一眼」用的。
+            crate::sxd_watch::clear_preload();
             // SXDffle：整部电影解析完成，此后解压字节可以被回收。
             //
             // 0.261109 里我把这一步放在函数开头的「已完成」早退分支，结果**永远不执行**：

@@ -142,8 +142,10 @@ fn ensure_mem_monitor() {
                     // RSS 2.2GB → 7.1GB 被杀。而所有采样都挂在渲染循环里，
                     // 那一刻全部停摆，日志里只剩两条「独立采样」。
                     // 这里从独立线程读「本帧跑了多久」，一超阈值就把现场摊开。
+                    // preload 阶段单独一支（见下面），这里跳过，避免同一现场打两遍。
+                    let sxd_in_preload = ruffle_core::sxd_watch::preload_tag() != 0;
                     if let Some(ms) = ruffle_core::sxd_watch::frame_elapsed_ms() {
-                        if ms >= 1500 && tick % 2 == 0 {
+                        if !sxd_in_preload && ms >= 1500 && tick % 2 == 0 {
                             let (alloc, freed, objs) = ruffle_core::heap_byte_stats_global();
                             let _ = (alloc, freed);
                             let stats = crate::alloc_bucket_stats();
@@ -203,13 +205,44 @@ fn ensure_mem_monitor() {
                                     })
                                     .collect();
                                 log::warn!(
-                                    "SXDffle 慢帧现场 · 方法 {} · 指令 {} · 耗时TOP {}",
+                                    "SXDffle 慢帧现场 · 阶段 {} · 方法 {} · 指令 {} · 耗时TOP {}",
+                                    snap.stage,
                                     snap.method,
                                     snap.opcode,
                                     top.join(" · ")
                                 );
                                 ruffle_core::sxd_watch::clear_slow();
                             }
+                        }
+                    }
+
+                    // ---- preload 阶段归因（0.261135）----
+                    //
+                    // 这一支**故意不放在 frame_elapsed_ms 里面**，原因有两条：
+                    // 1) preload 不进 AVM2 解释器，tick() 一次都打不到，peek_slow() 永远空；
+                    // 2) 若主线程卡在加载器/网络、run_frame 压根没跑，frame_elapsed_ms()
+                    //    返回 None，上面整段直接被跳过 —— RSS 照样能涨到 6.7GB，日志却一条没有。
+                    //
+                    // 而且要报的是**这一轮加载累计了多少毫秒**：ExecutionLimit 把 preload
+                    // 切成 2000 ops / 16ms 一片，单次调用永远不慢，慢的是连续跑了几百片。
+                    if let Some((tag, done, total_ms, depth)) =
+                        ruffle_core::sxd_watch::peek_preload()
+                    {
+                        if tick % 2 == 0 && total_ms >= 800 {
+                            let (_, _, objs) = ruffle_core::heap_byte_stats_global();
+                            let (swf_n, _swf_c, swf_raw) = ruffle_core::swf_load_stats();
+                            log::warn!(
+                                "SXDffle 慢帧 {}ms · 阶段=preload · tag={}({}) · 本片已解析 {} 个 · 嵌套 {} · RSS {}MB · GC {}万对象 · SWF {}部/{}MB",
+                                total_ms,
+                                ruffle_core::sxd_watch::preload_tag_name(tag),
+                                tag,
+                                done,
+                                depth,
+                                mb,
+                                objs / 10000,
+                                swf_n,
+                                swf_raw / (1024 * 1024)
+                            );
                         }
                     }
 
