@@ -456,10 +456,39 @@ fn f64_to_string<'gc>(n: f64, activation: &mut Activation<'_, 'gc>) -> AvmString
     }
 
     if n == 0.0 {
-        istr!("0")
-    } else {
-        AvmString::new_utf8(activation.gc(), f64_to_string_finite_nonzero(n))
+        return istr!("0");
     }
+
+    // SXDffle 0.261143：整数快路径。
+    //
+    // 热点里 `CoerceS` 只占 2% 的次数却吃掉 20~46% 的时间，而绝大多数调用都是
+    // `"" + 某个整数`。原来走 `format!("{}", f64)`：先按浮点最短表示格式化、
+    // 分配一个 String，再整串转成 UTF-16 的 AvmString —— 两次分配 + 一次编码。
+    //
+    // 整数不需要浮点格式化：直接往栈上写十进制数字，再一次性建 AvmString。
+    // 覆盖 |n| < 1e15 的整数（再大就要考虑 1e21 那条指数规则了）。
+    if n.fract() == 0.0 && n.abs() < 1e15 {
+        let neg = n < 0.0;
+        let mut v = n.abs() as u64;
+        let mut buf = [0u8; 20];
+        let mut i = buf.len();
+        loop {
+            i -= 1;
+            buf[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+            if v == 0 {
+                break;
+            }
+        }
+        if neg {
+            i -= 1;
+            buf[i] = b'-';
+        }
+        // 这里仍然要建 AvmString，但省掉了中间 String 和浮点格式化。
+        return AvmString::new_utf8(activation.gc(), std::str::from_utf8(&buf[i..]).unwrap());
+    }
+
+    AvmString::new_utf8(activation.gc(), f64_to_string_finite_nonzero(n))
 }
 
 fn f64_to_string_finite_nonzero(n: f64) -> String {
