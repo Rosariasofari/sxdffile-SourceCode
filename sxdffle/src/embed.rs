@@ -1890,6 +1890,19 @@ fn render_thread(
                 // 那是下一阶段的事。这里先留开关，默认 0 = 不回收。
                 // 这是第一次真正让战报内存掉下来：900 多部电影的解压字节
                 // 挂在 movie_libraries 的键上，GC 碰不到，只有这里能动手。
+                const SWEEP_IDLE_SWF_IDLE_SECS: u32 = 180;
+                {
+                    let mut pl = player.lock().unwrap();
+                    let (sn, sb) = pl.sweep_idle_movies(SWEEP_IDLE_SWF_IDLE_SECS);
+                    drop(pl);
+                    if sn > 0 {
+                        log::info!(
+                            "SXDffle embed: 摘除闲置电影库 {} 部 / {}MB（字节+角色+纹理）",
+                            sn,
+                            sb / (1024 * 1024)
+                        );
+                    }
+                }
                 const RELEASE_COLD_SWF_IDLE_SECS: u32 = 20; // 只对「无时间轴角色」的电影生效
                 if RELEASE_COLD_SWF_IDLE_SECS > 0 {
                     let pl = player.lock().unwrap();

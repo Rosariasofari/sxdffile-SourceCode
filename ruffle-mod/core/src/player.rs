@@ -2557,6 +2557,17 @@ impl Player {
     }
 
     /// SXDffle：(slab 峰值, 已归还系统)。
+    /// SXDffle：闲置电影整条库回收（根电影白名单）。
+    ///
+    /// 走 `update()` 而不是 `enter_arena()`：后者只给 `&GcRootData`，
+    /// 而摘库表项需要 `&mut Library`。`update()` 本来就是帧内的可变入口。
+    pub fn sweep_idle_movies(&mut self, idle_secs: u32) -> (usize, usize) {
+        self.update(|uc| {
+            uc.library
+                .sweep_idle_movies(idle_secs, Some(*uc.root_swf), true)
+        })
+    }
+
     pub fn gc_slab_reclaim_stats() -> (usize, usize) {
         gc_arena::slab_reclaim_stats()
     }

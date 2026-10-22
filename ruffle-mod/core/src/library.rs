@@ -521,6 +521,50 @@ impl<'gc> Library<'gc> {
         (n, bytes)
     }
 
+    /// SXDffle 0.261126：闲置电影的**整条库**回收。
+    ///
+    /// 0.261125 实测：战报加载 398 部电影、解压字节 718MB，退回宗门后
+    /// 「SWF解析」仍占 1113MB，是稳态 3.9GB 里唯一的大项。
+    /// `release_cold_movie_data` 只敢碰「无时间轴角色」的纯资源 SWF，
+    /// 而 342 部单位动作电影全都带 DefineSprite，一个都碰不到。
+    ///
+    /// 这里换个判据：`try_release_data` 能把字节放掉，说明这部电影
+    /// **已经整片 preload 完、且 last_active / last_used 都超过了 idle 秒**。
+    /// 那种状态下它的帧标签不会再被读，角色表也只是白占内存 ——
+    /// 于是整条 `MovieLibrary` 摘掉，Shape / BitmapHandle(GPU 纹理) 一起进 GC。
+    ///
+    /// 代价：被摘掉的电影如果之后又被 play()，动画会缺帧（不崩，越界读返回空切片）。
+    /// 所以 idle 取 180 秒，并且外部有开关可以随时关掉。
+    pub fn sweep_idle_movies(
+        &mut self,
+        idle_secs: u32,
+        exclude: Option<SwfMovie<'gc>>,
+        enabled: bool,
+    ) -> (usize, usize) {
+        if !enabled || idle_secs == 0 {
+            return (0, 0);
+        }
+        let now = SwfMovieData::now_secs();
+        let movies = self.movie_libraries.known_movies();
+        let mut n = 0usize;
+        let mut bytes = 0usize;
+        for movie in movies {
+            if let Some(ex) = exclude
+                && SwfMovie::ptr_eq(&movie, &ex)
+            {
+                continue;
+            }
+            let freed = movie.try_release_data(now, idle_secs);
+            if freed == 0 {
+                continue;
+            }
+            bytes += freed;
+            self.movie_libraries.0.remove(&movie);
+            n += 1;
+        }
+        (n, bytes)
+    }
+
     /// SXDffle：统计还有多少部电影的解压字节仍在内存里。
     pub fn resident_movie_data(&self) -> (usize, usize) {
         let mut n = 0usize;
