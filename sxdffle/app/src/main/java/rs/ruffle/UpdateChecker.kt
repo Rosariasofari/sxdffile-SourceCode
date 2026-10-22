@@ -41,6 +41,11 @@ object UpdateChecker {
         val pageUrl: String = LATEST_PAGE
     )
 
+    /** 下载单飞锁：多点几次「下载并安装」只允许一个下载在跑。 */
+    private val BUSY = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    fun isDownloading(): Boolean = BUSY.get()
+
     private fun open(url: String, timeoutMs: Int = 8000): HttpURLConnection {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = timeoutMs
@@ -116,8 +121,13 @@ object UpdateChecker {
         onProgress: (Int) -> Unit,
         onDone: (File?, String?) -> Unit
     ) {
+        if (!BUSY.compareAndSet(false, true)) {
+            onDone(null, "已有下载在进行中")
+            return
+        }
         val main = Handler(Looper.getMainLooper())
         Thread {
+            try {
             val dest = File(activity.cacheDir, "update-${release.version}.apk")
             // SXDffle：下载中途被杀会留下半个文件。以前只看「>1MB 就算下完」，
             // 于是下次直接把残缺包装进安装器。现在一律先写 .part，
@@ -180,6 +190,9 @@ object UpdateChecker {
                 }
             }
             main.post { onDone(null, lastErr) }
+            } finally {
+                BUSY.set(false)
+            }
         }.start()
     }
 

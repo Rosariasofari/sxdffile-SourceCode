@@ -3312,6 +3312,10 @@ class BrowserActivity : AppCompatActivity() {
     }
 
     private fun startUpdateDownload(r: UpdateChecker.Release) {
+        if (UpdateChecker.isDownloading()) {
+            showStatus("已有下载在进行中，请稍候")
+            return
+        }
         showStatus("开始下载 ${r.version}…")
         UpdateChecker.download(
             this,
