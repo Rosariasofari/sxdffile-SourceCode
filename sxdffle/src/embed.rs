@@ -231,11 +231,17 @@ fn ensure_mem_monitor() {
                         if tick % 2 == 0 && total_ms >= 800 {
                             let (_, _, objs) = ruffle_core::heap_byte_stats_global();
                             let (swf_n, _swf_c, swf_raw) = ruffle_core::swf_load_stats();
+                            // tag == 0 表示采样落在两次 preload 分片之间，
+                            // 这时「正在解析哪个 tag」没有意义，别报成 End(0) 误导。
+                            let tag_desc = if tag == 0 {
+                                "间隙".to_string()
+                            } else {
+                                format!("{}({})", ruffle_core::sxd_watch::preload_tag_name(tag), tag)
+                            };
                             log::warn!(
-                                "SXDffle 慢帧 {}ms · 阶段=preload · tag={}({}) · 本片已解析 {} 个 · 嵌套 {} · RSS {}MB · GC {}万对象 · SWF {}部/{}MB",
+                                "SXDffle 慢帧 {}ms · 阶段=preload · tag={} · 本片已解析 {} 个 · 嵌套 {} · RSS {}MB · GC {}万对象 · SWF {}部/{}MB",
                                 total_ms,
-                                ruffle_core::sxd_watch::preload_tag_name(tag),
-                                tag,
+                                tag_desc,
                                 done,
                                 depth,
                                 mb,
@@ -2243,12 +2249,38 @@ fn render_thread(
                     sm_swap
                 );
                 let (sk_packets, sk_bytes, sk_max) = ruffle_core::socket::socket_stats();
+                let sk_idle = match ruffle_core::socket::socket_idle_ms() {
+                    Some(ms) => format!("{:.1}s", ms as f64 / 1000.0),
+                    None => "从未".to_string(),
+                };
                 log::info!(
-                    "SXDffle embed: Socket 投递 {} 次 / 累计 {}KB / 单次最大 {}KB",
+                    "SXDffle embed: Socket 投递 {} 次 / 累计 {}KB / 单次最大 {}KB · 最近收包 {}前",
                     sk_packets,
                     sk_bytes / 1024,
-                    sk_max / 1024
+                    sk_max / 1024,
+                    sk_idle
                 );
+
+                // CoerceS 归因（0.261136）：对象转字符串的总量、慢点、单次最坏。
+                let (co_n, co_us, co_slow, co_worst) = ruffle_core::sxd_watch::coerce_stats();
+                if co_n > 0 {
+                    log::info!(
+                        "SXDffle embed: CoerceS 对象 {} 次 / 累计 {}ms / 慢(≥1.5ms) {} 次 / 最坏 {}ms",
+                        co_n,
+                        co_us / 1000,
+                        co_slow,
+                        co_worst / 1000
+                    );
+                }
+                let co_top = ruffle_core::sxd_watch::take_coerce_top();
+                if !co_top.is_empty() {
+                    let line: Vec<String> = co_top
+                        .iter()
+                        .take(5)
+                        .map(|(name, n, us)| format!("{}({}次/{}ms)", name, n, us / 1000))
+                        .collect();
+                    log::info!("SXDffle embed: CoerceS 慢点 TOP {}", line.join(" · "));
+                }
                 log::info!(
                     "SXDffle embed: 累计分配 ScriptObject {} 个 · 字符串 {} 个",
                     so_count,

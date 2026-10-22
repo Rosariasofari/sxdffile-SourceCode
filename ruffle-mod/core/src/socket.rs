@@ -65,11 +65,13 @@ pub enum SocketAction {
 // 战报数据经 Socket 下发，游戏在一次 socketData 回调里解析完整包。
 // 这里统计"每次投递多大、累计多少、最大一次多大"，
 // 用来判断"分片投递"是否可行、以及战报包的真实体积。
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 static SOCKET_PACKETS: AtomicUsize = AtomicUsize::new(0);
 static SOCKET_BYTES: AtomicUsize = AtomicUsize::new(0);
 static SOCKET_MAX: AtomicUsize = AtomicUsize::new(0);
+/// 最近一次收到数据的时刻（微秒）。用来判断「界面卡住时，服务器还有没有在发东西」。
+static SOCKET_LAST_US: AtomicU64 = AtomicU64::new(0);
 
 /// 返回 (投递次数, 累计字节, 单次最大字节)。
 pub fn socket_stats() -> (usize, usize, usize) {
@@ -78,6 +80,16 @@ pub fn socket_stats() -> (usize, usize, usize) {
         SOCKET_BYTES.load(Ordering::Relaxed),
         SOCKET_MAX.load(Ordering::Relaxed),
     )
+}
+
+/// 距离最近一次收包过了多少毫秒；从未收过包返回 `None`。
+pub fn socket_idle_ms() -> Option<u64> {
+    let last = SOCKET_LAST_US.load(Ordering::Relaxed);
+    if last == 0 {
+        return None;
+    }
+    let now = crate::sxd_watch::now_us_pub();
+    Some(now.saturating_sub(last) / 1000)
 }
 
 /// Manages the collection of Sockets.
@@ -314,6 +326,10 @@ impl<'gc> Sockets<'gc> {
                             SOCKET_PACKETS.fetch_add(1, Ordering::Relaxed);
                             SOCKET_BYTES.fetch_add(bytes_loaded, Ordering::Relaxed);
                             SOCKET_MAX.fetch_max(bytes_loaded, Ordering::Relaxed);
+                            SOCKET_LAST_US.store(
+                                crate::sxd_watch::now_us_pub(),
+                                Ordering::Relaxed,
+                            );
                             target.read_buffer().extend(data);
 
                             let progress_evt = EventObject::progress_event(

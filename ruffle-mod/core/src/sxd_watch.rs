@@ -30,6 +30,12 @@ fn now_us() -> u64 {
     EPOCH.get_or_init(Instant::now).elapsed().as_micros() as u64
 }
 
+/// 供同 crate 其他模块（socket）打时间戳用。
+#[inline]
+pub(crate) fn now_us_pub() -> u64 {
+    now_us()
+}
+
 /// 帧计时守卫：构造时打点，析构时清除（`run_frame` 里任何提前返回都能覆盖）。
 pub struct FrameTimer;
 
@@ -225,9 +231,18 @@ pub fn preload_tag_name(tag: u16) -> String {
     crate::swf::TagCode::format(tag)
 }
 
-/// 一次取全 preload 现场：`(tag, done, total_ms, depth)`。不在 preload 时返回 `None`。
+/// 一次取全 preload 现场：`(tag, done, total_ms, depth)`。
+///
+/// **只要这一轮加载还在进行就返回 `Some`**，即使采样恰好落在两次分片之间（此时 `tag == 0`）。
+/// 0.261135 的教训：判据写成「`PRELOAD_TAG != 0`」，而 preload 被切成 16ms 一片，
+/// 独立采样线程 99% 的概率落在片与片之间，于是整轮加载一条日志都没打出来。
 pub fn peek_preload() -> Option<(u16, u32, u64, u64)> {
-    if PRELOAD_TAG.load(Ordering::Relaxed) == 0 {
+    let now = now_us();
+    let last = PRELOAD_LAST_US.load(Ordering::Relaxed);
+    let running = PRELOAD_TAG.load(Ordering::Relaxed) != 0;
+    // 这一轮加载是否还「活着」：要么正在解析，要么上一次离开不超过 2 秒
+    let alive = running || (last != 0 && now.saturating_sub(last) <= PRELOAD_BURST_GAP_US);
+    if !alive {
         return None;
     }
     Some((
@@ -326,4 +341,89 @@ pub fn clear_slow() {
     if let Ok(mut guard) = SLOW.try_lock() {
         *guard = None;
     }
+}
+
+// ---- CoerceS 归因（0.261136）----
+//
+// 0.261135 的真机日志里 `AVM2 热点` 反复出现 `CoerceS 1%~2% / 96%~99%`：
+// 采样次数占比极低，耗时占比却是全部。opstats 是「每 4096 条指令采一次、
+// 把两次采样之间的时间记给当前指令」，所以这代表**少数几次 CoerceS 单次就吃掉了整段时间**。
+//
+// 而 `Value::Object` 的 `coerce_to_string` 会先调 `coerce_to_primitive(Hint::String)`，
+// 也就是走 AS3 的 `toString`；如果那个 toString 是 native 实现（Array/Object/Vector），
+// 它整段耗时都会算在这条 CoerceS 上，在解释器里完全看不见。
+//
+// 这里直接量：**谁家的对象、转出来多大、花了多久**。
+use std::sync::atomic::AtomicU32;
+
+static COERCE_N: AtomicU64 = AtomicU64::new(0);
+static COERCE_US: AtomicU64 = AtomicU64::new(0);
+static COERCE_SLOW_N: AtomicU64 = AtomicU64::new(0);
+static COERCE_WORST_US: AtomicU64 = AtomicU64::new(0);
+static COERCE_LAST_LOG_US: AtomicU64 = AtomicU64::new(0);
+static COERCE_LOG_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// (类名, 次数, 累计耗时微秒)
+static COERCE_TOP: Mutex<Vec<(String, u64, u64)>> = Mutex::new(Vec::new());
+
+/// 单次对象转字符串的耗时门槛：低于它的不记（正常也就几微秒）。
+const COERCE_SLOW_US: u64 = 1500;
+
+/// 每完成一次 `Value::Object` → String 就调一次。
+pub fn note_coerce(class: &str, out_len: usize, us: u64) {
+    COERCE_N.fetch_add(1, Ordering::Relaxed);
+    COERCE_US.fetch_add(us, Ordering::Relaxed);
+    if us < COERCE_SLOW_US {
+        return;
+    }
+    COERCE_SLOW_N.fetch_add(1, Ordering::Relaxed);
+    COERCE_WORST_US.fetch_max(us, Ordering::Relaxed);
+
+    if let Ok(mut top) = COERCE_TOP.try_lock() {
+        if let Some(e) = top.iter_mut().find(|(n, _, _)| n == class) {
+            e.1 += 1;
+            e.2 += us;
+        } else if top.len() < 8 {
+            top.push((class.to_string(), 1, us));
+        }
+    }
+
+    // 现场日志：最多 30 条、每秒 1 条，避免把日志刷爆。
+    if COERCE_LOG_COUNT.load(Ordering::Relaxed) >= 30 {
+        return;
+    }
+    let now = now_us();
+    let last = COERCE_LAST_LOG_US.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < 1_000_000 {
+        return;
+    }
+    COERCE_LAST_LOG_US.store(now, Ordering::Relaxed);
+    COERCE_LOG_COUNT.fetch_add(1, Ordering::Relaxed);
+    tracing::warn!(
+        "SXDffle CoerceS 慢: 类={} · 输出 {}KB · 单次 {}ms · 累计慢 {} 次",
+        class,
+        out_len / 1024,
+        us / 1000,
+        COERCE_SLOW_N.load(Ordering::Relaxed)
+    );
+}
+
+/// `(对象转换次数, 累计微秒, 慢次数, 单次最坏微秒)`。
+pub fn coerce_stats() -> (u64, u64, u64, u64) {
+    (
+        COERCE_N.load(Ordering::Relaxed),
+        COERCE_US.load(Ordering::Relaxed),
+        COERCE_SLOW_N.load(Ordering::Relaxed),
+        COERCE_WORST_US.load(Ordering::Relaxed),
+    )
+}
+
+/// 按累计耗时降序取 CoerceS 慢点 TOP（取完即清）。
+pub fn take_coerce_top() -> Vec<(String, u64, u64)> {
+    let mut out = match COERCE_TOP.try_lock() {
+        Ok(mut g) => std::mem::take(&mut *g),
+        Err(_) => Vec::new(),
+    };
+    out.sort_by(|a, b| b.2.cmp(&a.2));
+    out
 }

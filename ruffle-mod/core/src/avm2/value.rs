@@ -898,9 +898,20 @@ impl<'gc> Value<'gc> {
                 }
             }
             Value::String(s) => *s,
-            Value::Object(_) => self
-                .coerce_to_primitive(Some(Hint::String), activation)?
-                .coerce_to_string(activation)?,
+            Value::Object(obj) => {
+                // SXDffle：CoerceS 归因（0.261136）。
+                //
+                // 这条分支的耗时可能几乎全在 `toString` 里：如果它是 native 实现
+                // （Array/Object/Vector），整段都会算到这条 CoerceS 指令头上，
+                // 解释器的 opstats 只能看到「CoerceS 很慢」，看不到是**谁**慢。
+                let sxd_t = std::time::Instant::now();
+                let primitive = self.coerce_to_primitive(Some(Hint::String), activation)?;
+                let out = primitive.coerce_to_string(activation)?;
+                let sxd_us = sxd_t.elapsed().as_micros() as u64;
+                let sxd_class = obj.instance_of_class_name(activation.gc()).to_string();
+                crate::sxd_watch::note_coerce(&sxd_class, out.len(), sxd_us);
+                out
+            }
         })
     }
 
