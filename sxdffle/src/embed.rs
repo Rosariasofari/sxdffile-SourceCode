@@ -1893,7 +1893,12 @@ fn render_thread(
                 const SWEEP_IDLE_SWF_IDLE_SECS: u32 = 180;
                 {
                     let mut pl = player.lock().unwrap();
-                    let (sn, sb) = pl.sweep_idle_movies(SWEEP_IDLE_SWF_IDLE_SECS);
+                    // 静止检测：全场 20 秒没有推进时间轴，说明没有动画在播
+                    // （战报播放期间帧一直在走，不会命中），此时把 idle 降到 45 秒，
+                    // 让「退回宗门 → 回收」的等待从 180 秒缩到 65 秒左右。
+                    let quiet = ruffle_core::sxd_watch::idle_secs();
+                    let idle = if quiet >= 20 { 45 } else { SWEEP_IDLE_SWF_IDLE_SECS };
+                    let (sn, sb) = pl.sweep_idle_movies(idle);
                     drop(pl);
                     if sn > 0 {
                         log::info!(
@@ -2063,7 +2068,7 @@ fn render_thread(
                 }
                 // 大块分配来源：64K 以上的 1900 次分配合计 688MB，
                 // 尺寸重复度能直接指认「同一类结构被反复分配」。
-                let big = crate::big_alloc_top(10);
+                let big = crate::big_alloc_top(14);
                 if !big.is_empty() {
                     let line: Vec<String> = big
                         .iter()

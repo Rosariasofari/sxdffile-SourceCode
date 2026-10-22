@@ -48,6 +48,24 @@ impl Drop for FrameTimer {
     }
 }
 
+/// 上一次「有任何 MovieClip 真的推进了时间轴」的时刻（微秒）。
+pub static LAST_ADVANCE_US: AtomicU64 = AtomicU64::new(0);
+
+/// 由 frame_lifecycle 在时间轴真正推进时调用。
+#[inline]
+pub fn note_advance() {
+    LAST_ADVANCE_US.store(now_us(), Ordering::Relaxed);
+}
+
+/// 距离上一次时间轴推进过了多少秒（全场静止时长）。
+pub fn idle_secs() -> u64 {
+    let last = LAST_ADVANCE_US.load(Ordering::Relaxed);
+    if last == 0 {
+        return 0;
+    }
+    now_us().saturating_sub(last) / 1_000_000
+}
+
 /// 本帧已运行毫秒数；不在帧内时返回 `None`。
 pub fn frame_elapsed_ms() -> Option<u64> {
     let start = FRAME_START_US.load(Ordering::Relaxed);

@@ -285,6 +285,10 @@ pub fn big_alloc_top(n: usize) -> Vec<(usize, u8, usize)> {
         Ok(g) => g.clone(),
         Err(_) => return Vec::new(),
     };
+    // SXDffle 0.261128：把 GC slab 剔出去。
+    // slab 是 2MB 一块、几百块，按「尺寸×块数」排序会把真正的脚本大块全挤掉，
+    // 0.261126 的 TOP 前六条里有五条是 slab，750MB 的 1~8MB 块一条都没露脸。
+    v.retain(|e| e.1 != 12);
     v.sort_by(|a, b| (b.0 * b.2).cmp(&(a.0 * a.2)));
     v.truncate(n);
     v
