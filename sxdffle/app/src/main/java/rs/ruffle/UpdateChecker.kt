@@ -169,8 +169,39 @@ object UpdateChecker {
         }.start()
     }
 
+    /** 是否已获「安装未知应用」权限（Android 8+）。 */
+    fun canInstall(activity: Activity): Boolean =
+        android.os.Build.VERSION.SDK_INT < 26 || activity.packageManager.canRequestPackageInstalls()
+
+    /** 跳到「安装未知应用」授权页；用户回来后需要再点一次下载安装即可。 */
+    fun requestInstallPermission(activity: Activity) {
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            try {
+                val i = Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                    .setData(Uri.parse("package:" + activity.packageName))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                activity.startActivity(i)
+                return
+            } catch (_: Exception) {
+            }
+        }
+        // 兜底：打开本应用的设置页
+        try {
+            activity.startActivity(
+                Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                    .setData(Uri.parse("package:" + activity.packageName))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            )
+        } catch (_: Exception) {
+        }
+    }
+
     /** 拉起系统安装器。 */
     fun install(activity: Activity, apk: File) {
+        if (!canInstall(activity)) {
+            requestInstallPermission(activity)
+            return
+        }
         val uri: Uri = FileProvider.getUriForFile(
             activity,
             activity.packageName + ".fileprovider",

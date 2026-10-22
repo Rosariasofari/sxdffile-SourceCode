@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 应用内更新：拉起系统安装器需要「安装未知应用」权限 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- 仅 Android 8/9 需要：把日志 zip 写进公共「下载」目录；10 起改用 MediaStore -->
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"

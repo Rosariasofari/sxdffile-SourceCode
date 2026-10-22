@@ -3319,11 +3319,20 @@ class BrowserActivity : AppCompatActivity() {
             onProgress = { pct -> showStatus("下载中 $pct%") },
             onDone = { file, err ->
                 if (file != null) {
-                    showStatus("下载完成，请在系统安装界面确认")
-                    try {
-                        UpdateChecker.install(this, file)
-                    } catch (e: Exception) {
-                        showStatus("调起安装失败：${e.message}")
+                    if (!UpdateChecker.canInstall(this)) {
+                        androidx.appcompat.app.AlertDialog.Builder(this)
+                            .setTitle("需要安装权限")
+                            .setMessage("Android 8 以上要求单独授权「安装未知应用」。\n\n点『去授权』打开系统页面，允许本应用安装后返回，再点一次『检查更新 → 下载并安装』即可。")
+                            .setPositiveButton("去授权") { _, _ -> UpdateChecker.requestInstallPermission(this) }
+                            .setNegativeButton("取消", null)
+                            .show()
+                    } else {
+                        showStatus("下载完成，请在系统安装界面确认")
+                        try {
+                            UpdateChecker.install(this, file)
+                        } catch (e: Exception) {
+                            showStatus("调起安装失败：${e.message}")
+                        }
                     }
                 } else {
                     showStatus("下载失败：$err")
