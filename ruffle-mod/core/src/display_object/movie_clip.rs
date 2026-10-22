@@ -1404,6 +1404,7 @@ impl<'gc> MovieClip<'gc> {
         struct SxdAdv(std::time::Instant);
         impl Drop for SxdAdv {
             fn drop(&mut self) {
+                crate::sxd_watch::note_advance();
                 crate::frame_lifecycle::ADVANCE_US.fetch_add(
                     self.0.elapsed().as_micros() as u64,
                     std::sync::atomic::Ordering::Relaxed,
