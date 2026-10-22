@@ -425,6 +425,7 @@ impl<F: FutureSpawner<Error> + 'static, I: NavigatorInterface> NavigatorBackend
                     return;
                 }
                 Ok(stream) => {
+                    tracing::info!("SXDffle Socket 连接成功: {}:{}", host2, port);
                     let action = SocketAction::Connect(handle, ConnectionState::Connected);
                     if !send_action(&sender, action).await {
                         return;
@@ -445,16 +446,37 @@ impl<F: FutureSpawner<Error> + 'static, I: NavigatorInterface> NavigatorBackend
             let (mut read, mut write) = stream.split();
 
             let read = async move {
+                let mut total: u64 = 0;
                 loop {
                     let mut buffer = [0; 4096];
 
                     match read.read(&mut buffer).await {
                         Err(e) if e.kind() == ErrorKind::TimedOut => {} // try again later.
-                        Err(_) | Ok(0) => {
+                        Err(e) => {
+                            // SXDffle：断线原因一定要留痕 —— 之前只有一句「发送失败：Closed」，
+                            // 看不出是谁先动的手（服务器 RST / 本机网络切换 / 读超时）。
+                            tracing::warn!(
+                                "SXDffle Socket 断开: 读错误 {:?} · 已收 {} 字节 · {}:{}",
+                                e.kind(),
+                                total,
+                                host2,
+                                port
+                            );
+                            let _ = send_action(&sender, SocketAction::Close(handle)).await;
+                            break;
+                        }
+                        Ok(0) => {
+                            tracing::warn!(
+                                "SXDffle Socket 断开: 对端关闭（EOF）· 已收 {} 字节 · {}:{}",
+                                total,
+                                host2,
+                                port
+                            );
                             let _ = send_action(&sender, SocketAction::Close(handle)).await;
                             break;
                         }
                         Ok(read) => {
+                            total += read as u64;
                             let buffer = buffer.into_iter().take(read).collect::<Vec<_>>();
 
                             let action = SocketAction::Data(handle, buffer);
