@@ -270,6 +270,20 @@ fn note_big(size: usize, tag: u8) {
 #[inline]
 fn note_big_free(size: usize, tag: u8) {
     if let Ok(mut v) = BIG_BLOCKS.try_lock() {
+        // SXDffle 0.261131：tag 兜底。
+        // 0.261126 的整块归还路径里，块头读出的 tag 与登记时不一致，
+        // 导致 (size, tag) 精确匹配失败、计数永远扣不掉 ——
+        // `2048KB×1130` 而 slab 实际只有 565 块，整张 TOP 偏大一倍。
+        // 精确匹配失败时按「同尺寸任意 tag」扣，宁可少算也不错算。
+        if !v.iter().any(|e| e.0 == size && e.1 == tag) {
+            if let Some(e) = v.iter_mut().find(|e| e.0 == size) {
+                e.2 = e.2.saturating_sub(1);
+                if e.2 == 0 {
+                    v.retain(|x| x.0 != size);
+                }
+                return;
+            }
+        }
         if let Some(e) = v.iter_mut().find(|e| e.0 == size && e.1 == tag) {
             e.2 = e.2.saturating_sub(1);
             if e.2 == 0 {
