@@ -3316,33 +3316,18 @@ class BrowserActivity : AppCompatActivity() {
             showStatus("已有下载在进行中，请稍候")
             return
         }
-        showStatus("开始下载 ${r.version}…")
-        UpdateChecker.download(
-            this,
-            r,
-            onProgress = { pct -> showStatus("下载中 $pct%") },
-            onDone = { file, err ->
-                if (file != null) {
-                    if (!UpdateChecker.canInstall(this)) {
-                        androidx.appcompat.app.AlertDialog.Builder(this)
-                            .setTitle("需要安装权限")
-                            .setMessage("Android 8 以上要求单独授权「安装未知应用」。\n\n点『去授权』打开系统页面，允许本应用安装后返回，再点一次『检查更新 → 下载并安装』即可。")
-                            .setPositiveButton("去授权") { _, _ -> UpdateChecker.requestInstallPermission(this) }
-                            .setNegativeButton("取消", null)
-                            .show()
-                    } else {
-                        showStatus("下载完成，请在系统安装界面确认")
-                        try {
-                            UpdateChecker.install(this, file)
-                        } catch (e: Exception) {
-                            showStatus("调起安装失败：${e.message}")
-                        }
-                    }
-                } else {
-                    showStatus("下载失败：$err")
-                }
+        showStatus("开始下载 ${r.version}…（可切后台，进度见通知栏）")
+        // 交给前台服务下载：普通线程会在 APP 切后台时被系统冻结导致断连。
+        try {
+            val i = android.content.Intent(this, UpdateService::class.java).apply {
+                action = UpdateService.ACTION_START
+                putExtra(UpdateService.EXTRA_URL, r.assetUrl)
+                putExtra(UpdateService.EXTRA_VERSION, r.version)
             }
-        )
+            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(i) else startService(i)
+        } catch (e: Exception) {
+            showStatus("启动下载服务失败：${e.message}")
+        }
     }
 
     private fun appVersionName(): String = try {
