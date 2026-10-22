@@ -2103,8 +2103,9 @@ fn render_thread(
                             })
                             .collect();
                         log::info!(
-                            "SXDffle embed: AVM2 热点(次数/耗时) {}",
-                            line.join(" · ")
+                            "SXDffle embed: AVM2 热点(次数/耗时) {} · 等待 {}s",
+                            line.join(" · "),
+                            ruffle_core::sxd_watch::avm_idle_us() / 1_000_000
                         );
                     }
                 }
@@ -2273,6 +2274,39 @@ fn render_thread(
                     sk_max / 1024,
                     sk_idle
                 );
+                // 最近 6 包的内容头：卡住时如果包还在来，这四个字节能看出是不是同一路数据。
+                let rp = ruffle_core::socket::recent_packets();
+                if !rp.is_empty() {
+                    let items: Vec<String> = rp
+                        .iter()
+                        .rev()
+                        .take(6)
+                        .map(|(ms, n, h)| {
+                            format!(
+                                "{:.1}s/{}B/{:02x}{:02x}{:02x}{:02x}",
+                                *ms as f64 / 1000.0,
+                                n,
+                                h[0],
+                                h[1],
+                                h[2],
+                                h[3]
+                            )
+                        })
+                        .collect();
+                    log::info!("SXDffle embed: 最近收包 {}", items.join(" · "));
+                }
+                // Loader 生命周期：启动 vs init 完成，差值就是「还挂着没回来的加载」。
+                let (ls, li, lidle, lurl) = ruffle_core::sxd_watch::loader_stats();
+                if ls > 0 {
+                    log::info!(
+                        "SXDffle embed: Loader 启动 {} / init 完成 {} / 差 {} · 最近启动 {:.1}s 前 {}",
+                        ls,
+                        li,
+                        ls.saturating_sub(li),
+                        lidle as f64 / 1000.0,
+                        lurl
+                    );
+                }
 
                 // CoerceS 归因（0.261136）：对象转字符串的总量、慢点、单次最坏。
                 let (co_n, co_us, co_slow, co_worst) = ruffle_core::sxd_watch::coerce_stats();

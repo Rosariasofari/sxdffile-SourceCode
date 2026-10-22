@@ -24,6 +24,22 @@ thread_local! {
 /// 若只是条目多到几十亿，那说明游戏本身的计算量就是这么大，得换思路。
 static TOTAL_OPS: AtomicU64 = AtomicU64::new(0);
 
+/// 采样间隔超过这个值就认为「解释器在等」（等 socket、等帧、等 IO），
+/// 这段墙钟时间不属于任何一条指令，不能算进热点占比。
+///
+/// 0.261137 的日志里，卡在 96% 时 `CoerceS 1%/99%` 连续出现 —— 那是假象：
+/// 应用 15fps 空转，每隔几十毫秒才执行几条指令，两次采样之间的空档
+/// 全被记到了碰巧被采到的那条指令头上。
+const IDLE_GAP_US: u64 = 200_000;
+
+/// 被判定为「等」的累计时间（微秒）。
+static IDLE_US: AtomicU64 = AtomicU64::new(0);
+
+/// 空闲（等待）累计时间，宿主用来给热点百分比「去掉水分」。
+pub fn idle_us() -> u64 {
+    IDLE_US.load(Ordering::Relaxed)
+}
+
 /// 记录一条指令（已截断的变体名，如 `GetPropertyFast`）。
 ///
 /// 同时记录「距上一次采样过了多久」，把它归给当前这条指令。
@@ -34,12 +50,16 @@ static TOTAL_OPS: AtomicU64 = AtomicU64::new(0);
 pub fn note(name: &str) {
     TOTAL_OPS.fetch_add(4096, Ordering::Relaxed);
     let now = std::time::Instant::now();
-    let dt = LAST.with(|l| {
+    let mut dt = LAST.with(|l| {
         let mut slot = l.borrow_mut();
         let dt = slot.map(|t| now.duration_since(t).as_micros() as u64).unwrap_or(0);
         *slot = Some(now);
         dt
     });
+    if dt > IDLE_GAP_US {
+        IDLE_US.fetch_add(dt, Ordering::Relaxed);
+        dt = 0;
+    }
     COUNTS.with(|c| {
         let mut v = c.borrow_mut();
         if let Some(e) = v.iter_mut().find(|(n, _, _)| n == name) {

@@ -82,6 +82,39 @@ pub fn socket_stats() -> (usize, usize, usize) {
     )
 }
 
+/// 最近几包的摘要：(距今毫秒, 字节数, 前 4 字节)。最多 8 条。
+///
+/// 卡在 96% 时如果包还在来，看这四个字节就能判断是不是同一个协议头、
+/// 是不是战斗数据流 —— 比「累计 315KB」有用得多。
+static RECENT: std::sync::Mutex<Vec<(u64, usize, [u8; 4])>> = std::sync::Mutex::new(Vec::new());
+
+/// 记录一包（内部调用）。
+fn note_packet(bytes: &[u8]) {
+    let now = crate::sxd_watch::now_us_pub();
+    let mut head = [0u8; 4];
+    for (i, b) in bytes.iter().take(4).enumerate() {
+        head[i] = *b;
+    }
+    if let Ok(mut v) = RECENT.try_lock() {
+        v.push((now, bytes.len(), head));
+        if v.len() > 8 {
+            v.remove(0);
+        }
+    }
+}
+
+/// 取最近 8 包：(距今毫秒, 字节数, 前 4 字节)。
+pub fn recent_packets() -> Vec<(u64, usize, [u8; 4])> {
+    let now = crate::sxd_watch::now_us_pub();
+    match RECENT.try_lock() {
+        Ok(v) => v
+            .iter()
+            .map(|(t, n, h)| (now.saturating_sub(*t) / 1000, *n, *h))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 /// 距离最近一次收包过了多少毫秒；从未收过包返回 `None`。
 pub fn socket_idle_ms() -> Option<u64> {
     let last = SOCKET_LAST_US.load(Ordering::Relaxed);
@@ -330,6 +363,7 @@ impl<'gc> Sockets<'gc> {
                                 crate::sxd_watch::now_us_pub(),
                                 Ordering::Relaxed,
                             );
+                            note_packet(&data);
                             target.read_buffer().extend(data);
 
                             let progress_evt = EventObject::progress_event(

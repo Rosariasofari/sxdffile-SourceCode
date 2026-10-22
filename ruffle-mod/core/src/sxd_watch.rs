@@ -30,6 +30,13 @@ fn now_us() -> u64 {
     EPOCH.get_or_init(Instant::now).elapsed().as_micros() as u64
 }
 
+/// AVM2 解释器「等待」的累计微秒（等 socket / 等帧 / 等 IO）。
+/// 热点百分比要把这段剔掉才有意义，见 `opstats::IDLE_GAP_US`。
+#[inline]
+pub fn avm_idle_us() -> u64 {
+    crate::avm2::opstats::idle_us()
+}
+
 /// 供同 crate 其他模块（socket）打时间戳用。
 #[inline]
 pub(crate) fn now_us_pub() -> u64 {
@@ -426,4 +433,51 @@ pub fn take_coerce_top() -> Vec<(String, u64, u64)> {
     };
     out.sort_by(|a, b| b.2.cmp(&a.2));
     out
+}
+
+
+// ---- Loader 生命周期（0.261138）----
+//
+// 卡在 96% 那几分钟里，`加载/卸载 调用` 涨了 4 次，而 `SWF 载入` 只涨了 1 次 ——
+// 差的 3 次如果一直不回来，就是「进度条永远差最后几个百分点」的直接原因。
+// 这里只数「启动」和「init 事件触发」，两者之差 = 还挂着的加载。
+static LOADER_STARTED: AtomicU64 = AtomicU64::new(0);
+static LOADER_INITED: AtomicU64 = AtomicU64::new(0);
+static LOADER_LAST_START_US: AtomicU64 = AtomicU64::new(0);
+static LOADER_LAST_URL: Mutex<String> = Mutex::new(String::new());
+
+pub fn note_loader_start(url: &str) {
+    LOADER_STARTED.fetch_add(1, Ordering::Relaxed);
+    LOADER_LAST_START_US.store(now_us(), Ordering::Relaxed);
+    if let Ok(mut g) = LOADER_LAST_URL.try_lock() {
+        g.clear();
+        g.push_str(url);
+        if g.len() > 120 {
+            g.truncate(120);
+        }
+    }
+}
+
+pub fn note_loader_init() {
+    LOADER_INITED.fetch_add(1, Ordering::Relaxed);
+}
+
+/// `(启动数, 完成数, 最近启动距今毫秒, 最近启动的 URL)`
+pub fn loader_stats() -> (u64, u64, u64, String) {
+    let last = LOADER_LAST_START_US.load(Ordering::Relaxed);
+    let idle = if last == 0 {
+        0
+    } else {
+        now_us().saturating_sub(last) / 1000
+    };
+    let url = LOADER_LAST_URL
+        .try_lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    (
+        LOADER_STARTED.load(Ordering::Relaxed),
+        LOADER_INITED.load(Ordering::Relaxed),
+        idle,
+        url,
+    )
 }

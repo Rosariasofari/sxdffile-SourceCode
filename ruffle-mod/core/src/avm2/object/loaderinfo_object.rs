@@ -199,6 +199,7 @@ impl<'gc> LoaderInfoObject<'gc> {
         self.0.expose_content.set(true);
         if !self.0.init_event_fired.get() {
             self.0.init_event_fired.set(true);
+            crate::sxd_watch::note_loader_init();
 
             // TODO - 'init' should be fired earlier during the download.
             // Right now, we fire it when downloading is fully completed.
