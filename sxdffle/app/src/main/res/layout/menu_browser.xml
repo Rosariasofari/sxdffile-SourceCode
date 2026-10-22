@@ -160,6 +160,12 @@
             style="@style/SxdffleMenuItem"
             android:text="清理资源缓存" />
 
+        <!-- 更新：查 GitHub Releases 上的最新内测包（带国内镜像回退） -->
+        <TextView
+            android:id="@+id/menuCheckUpdate"
+            style="@style/SxdffleMenuItem"
+            android:text="检查更新" />
+
         <!-- 版本号：排查问题时先要确认装的是哪个包 -->
         <TextView
             android:id="@+id/menuVersion"

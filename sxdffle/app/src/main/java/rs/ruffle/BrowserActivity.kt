@@ -740,6 +740,8 @@ class BrowserActivity : AppCompatActivity() {
         view.findViewById<android.widget.TextView>(R.id.menuVersion)?.text =
             "版本 ${appVersionName()} · 内核 SXDffle-mod"
 
+        bind(R.id.menuCheckUpdate) { checkForUpdate(manual = true) }
+
         bind(R.id.menuDesktopMode) { showBrowseModeDialog() }
         bind(R.id.menuAudioToggle) {
             audioEnabled = !audioEnabled
@@ -3251,6 +3253,67 @@ class BrowserActivity : AppCompatActivity() {
     )
 
     /** 应用版本号（BuildConfig 在 AGP8 默认关闭，这里直接问系统） */
+    // ---- 内测包更新 ----
+
+    /**
+     * 查最新构建。manual=true 时无论结果如何都给反馈；
+     * 自动检查（manual=false）只在「确实有新版本」时弹窗，不打扰日常使用。
+     */
+    private fun checkForUpdate(manual: Boolean) {
+        if (manual) showStatus("正在检查更新…")
+        Thread {
+            val latest = UpdateChecker.fetchLatest()
+            val current = appVersionName()
+            runOnUiThread {
+                if (latest == null) {
+                    if (manual) showStatus("检查失败：网络不可达，可到发布页手动下载")
+                    return@runOnUiThread
+                }
+                if (UpdateChecker.compare(latest.version, current) <= 0) {
+                    if (manual) showStatus("已是最新版本 $current")
+                    return@runOnUiThread
+                }
+                androidx.appcompat.app.AlertDialog.Builder(this)
+                    .setTitle("发现新版本 ${latest.version}")
+                    .setMessage(
+                        "当前 $current → 最新 ${latest.version}\n\n" +
+                            "下载后会交给系统安装器覆盖安装，账号与配置不受影响。"
+                    )
+                    .setPositiveButton("下载并安装") { _, _ -> startUpdateDownload(latest) }
+                    .setNeutralButton("打开发布页") { _, _ ->
+                        try {
+                            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(latest.pageUrl)))
+                        } catch (e: Exception) {
+                            showStatus("无法打开浏览器")
+                        }
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+        }.start()
+    }
+
+    private fun startUpdateDownload(r: UpdateChecker.Release) {
+        showStatus("开始下载 ${r.version}…")
+        UpdateChecker.download(
+            this,
+            r,
+            onProgress = { pct -> showStatus("下载中 $pct%") },
+            onDone = { file, err ->
+                if (file != null) {
+                    showStatus("下载完成，请在系统安装界面确认")
+                    try {
+                        UpdateChecker.install(this, file)
+                    } catch (e: Exception) {
+                        showStatus("调起安装失败：${e.message}")
+                    }
+                } else {
+                    showStatus("下载失败：$err")
+                }
+            }
+        )
+    }
+
     private fun appVersionName(): String = try {
         packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
     } catch (e: Exception) {
