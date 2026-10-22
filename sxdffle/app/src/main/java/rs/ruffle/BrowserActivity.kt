@@ -3266,11 +3266,29 @@ class BrowserActivity : AppCompatActivity() {
             val current = appVersionName()
             runOnUiThread {
                 if (latest == null) {
-                    if (manual) showStatus("检查失败：网络不可达，可到发布页手动下载")
+                    if (manual) {
+                        androidx.appcompat.app.AlertDialog.Builder(this)
+                            .setTitle("检查更新失败")
+                            .setMessage("无法连接更新服务器（api.github.com 与镜像都不可达）。\n\n可稍后再试，或直接在浏览器打开发布页手动下载。")
+                            .setPositiveButton("知道了", null)
+                            .setNeutralButton("打开发布页") { _, _ ->
+                                try {
+                                    startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/Rosariasofari/sxdffile-mod/releases")))
+                                } catch (_: Exception) {
+                                }
+                            }
+                            .show()
+                    }
                     return@runOnUiThread
                 }
                 if (UpdateChecker.compare(latest.version, current) <= 0) {
-                    if (manual) showStatus("已是最新版本 $current")
+                    if (manual) {
+                        androidx.appcompat.app.AlertDialog.Builder(this)
+                            .setTitle("已是最新版本")
+                            .setMessage("当前版本 $current\n远端版本 ${latest.version}")
+                            .setPositiveButton("好", null)
+                            .show()
+                    }
                     return@runOnUiThread
                 }
                 androidx.appcompat.app.AlertDialog.Builder(this)
