@@ -1,7 +1,9 @@
 //! RegExp Structure
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::num::NonZero;
+use std::sync::{Mutex, OnceLock};
 
 use crate::avm2::Error;
 use crate::avm2::activation::Activation;
@@ -54,6 +56,53 @@ bitflags! {
     }
 }
 
+// ---- SXDffle：正则编译缓存（0.261142）----
+//
+// 真机日志里 `新建对象 TOP` 第一名长期是 `RegExp=56万`：战报那一帧的 5.8 秒里，
+// 游戏造了几十万个 RegExp，而每个 RegExp 第一次匹配都会 `regress::Regex::with_flags`
+// 现场编译一次。同样的模式被编译几十万遍，纯浪费。
+//
+// 按 (source, flags) 缓存编译结果，命中直接 clone（regress::Regex 是 Clone 的）。
+static REGEX_CACHE: OnceLock<Mutex<HashMap<(String, u8), Result<regress::Regex, ()>>>> =
+    OnceLock::new();
+
+fn compile_cached(source: &str, flags: RegExpFlags) -> Result<regress::Regex, ()> {
+    let key = (source.to_string(), flags.bits());
+    let cache = REGEX_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+
+    if let Ok(g) = cache.lock()
+        && let Some(hit) = g.get(&key)
+    {
+        crate::sxd_watch::note_regex_hit();
+        return hit.clone();
+    }
+
+    let t = std::time::Instant::now();
+    let re = regress::Regex::with_flags(
+        source,
+        regress::Flags {
+            icase: flags.contains(RegExpFlags::IGNORE_CASE),
+            multiline: flags.contains(RegExpFlags::MULTILINE),
+            dot_all: flags.contains(RegExpFlags::DOTALL),
+            extended: flags.contains(RegExpFlags::EXTENDED),
+            no_opt: false,
+            unicode: false,
+            unicode_sets: false,
+        },
+    )
+    .map_err(drop);
+    crate::sxd_watch::note_regex_compile(t.elapsed().as_micros() as u64);
+
+    if let Ok(mut g) = cache.lock() {
+        // 简单上限：模式通常只有几十种，超过就整体清掉，不做 LRU。
+        if g.len() > 256 {
+            g.clear();
+        }
+        g.insert(key, re.clone());
+    }
+    re
+}
+
 impl<'gc> RegExp<'gc> {
     pub fn new(source: AvmString<'gc>) -> Self {
         Self {
@@ -96,19 +145,7 @@ impl<'gc> RegExp<'gc> {
         F: FnOnce(&mut CachedText<'gc>, regress::Match) -> T,
     {
         if self.cached_regex.is_none() {
-            let re = regress::Regex::with_flags(
-                &self.source.to_utf8_lossy(),
-                regress::Flags {
-                    icase: self.flags.contains(RegExpFlags::IGNORE_CASE),
-                    multiline: self.flags.contains(RegExpFlags::MULTILINE),
-                    dot_all: self.flags.contains(RegExpFlags::DOTALL),
-                    extended: self.flags.contains(RegExpFlags::EXTENDED),
-                    no_opt: false,
-                    unicode: false,
-                    unicode_sets: false,
-                },
-            );
-            self.cached_regex = Some(re.map_err(drop));
+            self.cached_regex = Some(compile_cached(&self.source.to_utf8_lossy(), self.flags));
         }
 
         let regex = match self.cached_regex.as_mut() {

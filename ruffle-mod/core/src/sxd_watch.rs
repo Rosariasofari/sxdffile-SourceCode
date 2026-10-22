@@ -30,6 +30,31 @@ fn now_us() -> u64 {
     EPOCH.get_or_init(Instant::now).elapsed().as_micros() as u64
 }
 
+/// 正则编译统计（0.261142）：`(编译次数, 缓存命中次数, 编译微秒)`。
+static RE_COMPILES: AtomicU64 = AtomicU64::new(0);
+static RE_HITS: AtomicU64 = AtomicU64::new(0);
+static RE_US: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+pub fn note_regex_compile(us: u64) {
+    RE_COMPILES.fetch_add(1, Ordering::Relaxed);
+    RE_US.fetch_add(us, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn note_regex_hit() {
+    RE_HITS.fetch_add(1, Ordering::Relaxed);
+}
+
+#[inline]
+pub fn regexp_stats() -> (u64, u64, u64) {
+    (
+        RE_COMPILES.load(Ordering::Relaxed),
+        RE_HITS.load(Ordering::Relaxed),
+        RE_US.load(Ordering::Relaxed),
+    )
+}
+
 /// AVM2 解释器「等待」的累计微秒（等 socket / 等帧 / 等 IO）。
 /// 热点百分比要把这段剔掉才有意义，见 `opstats::IDLE_GAP_US`。
 #[inline]

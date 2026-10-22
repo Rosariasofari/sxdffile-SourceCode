@@ -2295,6 +2295,18 @@ fn render_thread(
                         .collect();
                     log::info!("SXDffle embed: 最近收包 {}", items.join(" · "));
                 }
+                // 正则编译：命中率低说明缓存没起作用，编译耗时会直接反映到长帧上。
+                {
+                    let (rc, rh, rus) = ruffle_core::sxd_watch::regexp_stats();
+                    if rc + rh > 0 {
+                        log::info!(
+                            "SXDffle embed: 正则编译 {} 次 / 缓存命中 {} 次 / 累计 {}ms",
+                            rc,
+                            rh,
+                            rus / 1000
+                        );
+                    }
+                }
                 // Loader 生命周期：启动 vs init 完成，差值就是「还挂着没回来的加载」。
                 let (ls, li, lidle, lurl) = ruffle_core::sxd_watch::loader_stats();
                 if ls > 0 {
