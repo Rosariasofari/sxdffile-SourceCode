@@ -119,6 +119,11 @@ object UpdateChecker {
         val main = Handler(Looper.getMainLooper())
         Thread {
             val dest = File(activity.cacheDir, "update-${release.version}.apk")
+            // SXDffle：下载中途被杀会留下半个文件。以前只看「>1MB 就算下完」，
+            // 于是下次直接把残缺包装进安装器。现在一律先写 .part，
+            // 校验通过才改名；进程启动时也会清掉所有 .part。
+            val part = File(activity.cacheDir, "update-${release.version}.apk.part")
+            if (part.exists()) part.delete()
             if (dest.exists() && dest.length() > 1024 * 1024) {
                 main.post { onDone(dest, null) }
                 return@Thread
@@ -134,8 +139,9 @@ object UpdateChecker {
                         continue
                     }
                     val total = c.contentLengthLong
+                    if (part.exists()) part.delete()
                     c.inputStream.use { input ->
-                        dest.outputStream().use { out ->
+                        part.outputStream().use { out ->
                             val buf = ByteArray(64 * 1024)
                             var got = 0L
                             var lastPct = -1
@@ -155,18 +161,36 @@ object UpdateChecker {
                         }
                     }
                     c.disconnect()
-                    if (dest.length() > 1024 * 1024) {
+                    // 有 Content-Length 就核对，没有则按 >1MB 兜底
+                    val ok = part.length() > 1024 * 1024 &&
+                        (total <= 0 || part.length() == total)
+                    if (ok) {
+                        if (dest.exists()) dest.delete()
+                        part.renameTo(dest)
                         main.post { onDone(dest, null) }
                         return@Thread
                     }
-                    lastErr = "文件不完整"
+                    lastErr = if (total > 0)
+                        "文件不完整（${part.length()}/$total）" else "文件不完整"
+                    part.delete()
                 } catch (e: Exception) {
                     lastErr = e.message ?: e.javaClass.simpleName
+                    if (part.exists()) part.delete()
                     if (dest.exists()) dest.delete()
                 }
             }
             main.post { onDone(null, lastErr) }
         }.start()
+    }
+
+    /** 启动时清掉上次中断留下的半截文件。 */
+    fun cleanupStale(activity: Activity) {
+        try {
+            activity.cacheDir.listFiles()?.forEach { f ->
+                if (f.name.startsWith("update-") && f.name.endsWith(".part")) f.delete()
+            }
+        } catch (_: Exception) {
+        }
     }
 
     /** 是否已获「安装未知应用」权限（Android 8+）。 */
