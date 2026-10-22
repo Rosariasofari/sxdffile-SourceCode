@@ -481,3 +481,42 @@ pub fn loader_stats() -> (u64, u64, u64, String) {
         url,
     )
 }
+
+// ---- 未完成的 Loader（0.261139）----
+//
+// 0.261138 的日志把范围缩到了「7 个 Loader 起了没回来」，但不知道是哪 7 个：
+// 摘要里只有「最近一次启动」的 URL。这里按 `LoaderInfoObject` 的 GC 指针记账，
+// 启动时登记、init 事件时销账，差出来的就是那 7 个，连 URL 一起列出来。
+static PENDING_LOADERS: Mutex<Vec<(usize, String, u64)>> = Mutex::new(Vec::new());
+
+pub fn loader_pending_add(key: usize, url: &str) {
+    if let Ok(mut v) = PENDING_LOADERS.try_lock() {
+        if v.iter().all(|(k, _, _)| *k != key) {
+            v.push((key, url.chars().take(120).collect(), now_us()));
+        }
+        if v.len() > 64 {
+            v.remove(0);
+        }
+    }
+}
+
+pub fn loader_pending_done(key: usize) {
+    if let Ok(mut v) = PENDING_LOADERS.try_lock() {
+        v.retain(|(k, _, _)| *k != key);
+    }
+}
+
+/// 还挂着的加载：`(URL, 已等待毫秒)`，按等待时间降序，最多 8 条。
+pub fn loader_pending() -> Vec<(String, u64)> {
+    let now = now_us();
+    let mut out: Vec<(String, u64)> = match PENDING_LOADERS.try_lock() {
+        Ok(v) => v
+            .iter()
+            .map(|(_, u, t)| (u.clone(), now.saturating_sub(*t) / 1000))
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    out.sort_by(|a, b| b.1.cmp(&a.1));
+    out.truncate(8);
+    out
+}

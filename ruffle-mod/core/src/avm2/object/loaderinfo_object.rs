@@ -200,6 +200,7 @@ impl<'gc> LoaderInfoObject<'gc> {
         if !self.0.init_event_fired.get() {
             self.0.init_event_fired.set(true);
             crate::sxd_watch::note_loader_init();
+            crate::sxd_watch::loader_pending_done(gc_arena::Gc::as_ptr(self.0) as usize);
 
             // TODO - 'init' should be fired earlier during the download.
             // Right now, we fire it when downloading is fully completed.

@@ -72,6 +72,38 @@ static SOCKET_BYTES: AtomicUsize = AtomicUsize::new(0);
 static SOCKET_MAX: AtomicUsize = AtomicUsize::new(0);
 /// 最近一次收到数据的时刻（微秒）。用来判断「界面卡住时，服务器还有没有在发东西」。
 static SOCKET_LAST_US: AtomicU64 = AtomicU64::new(0);
+// 发送侧：次数 / 字节 / 时刻 / 最近 6 包
+static SOCKET_TX_N: AtomicU64 = AtomicU64::new(0);
+static SOCKET_TX_BYTES: AtomicU64 = AtomicU64::new(0);
+static SOCKET_TX_LAST_US: AtomicU64 = AtomicU64::new(0);
+static TX_RECENT: std::sync::Mutex<Vec<(u64, usize, [u8; 4])>> = std::sync::Mutex::new(Vec::new());
+
+/// `(发送次数, 累计字节, 距最近一次发送毫秒)`。
+pub fn socket_tx_stats() -> (u64, u64, Option<u64>) {
+    let last = SOCKET_TX_LAST_US.load(Ordering::Relaxed);
+    let idle = if last == 0 {
+        None
+    } else {
+        Some(crate::sxd_watch::now_us_pub().saturating_sub(last) / 1000)
+    };
+    (
+        SOCKET_TX_N.load(Ordering::Relaxed),
+        SOCKET_TX_BYTES.load(Ordering::Relaxed),
+        idle,
+    )
+}
+
+/// 最近 6 次发送：(距今毫秒, 字节数, 前 4 字节)。
+pub fn recent_sends() -> Vec<(u64, usize, [u8; 4])> {
+    let now = crate::sxd_watch::now_us_pub();
+    match TX_RECENT.try_lock() {
+        Ok(v) => v
+            .iter()
+            .map(|(t, n, h)| (now.saturating_sub(*t) / 1000, *n, *h))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
 
 /// 返回 (投递次数, 累计字节, 单次最大字节)。
 pub fn socket_stats() -> (usize, usize, usize) {
@@ -220,6 +252,22 @@ impl<'gc> Sockets<'gc> {
     }
 
     pub fn send(&mut self, handle: SocketHandle, data: Vec<u8>) {
+        // SXDffle：发送侧统计 —— 卡住时「发了没有、发的是什么」和「收了什么」一样重要。
+        SOCKET_TX_N.fetch_add(1, Ordering::Relaxed);
+        SOCKET_TX_BYTES.fetch_add(data.len() as u64, Ordering::Relaxed);
+        SOCKET_TX_LAST_US.store(crate::sxd_watch::now_us_pub(), Ordering::Relaxed);
+        {
+            let mut head = [0u8; 4];
+            for (i, b) in data.iter().take(4).enumerate() {
+                head[i] = *b;
+            }
+            if let Ok(mut v) = TX_RECENT.try_lock() {
+                v.push((SOCKET_TX_LAST_US.load(Ordering::Relaxed), data.len(), head));
+                if v.len() > 6 {
+                    v.remove(0);
+                }
+            }
+        }
         if let Some(Socket { sender, .. }) = self.sockets.get_mut(handle) {
             // We use an unbounded socket, so this should only ever error if the channel is closed
             // (the receiver was dropped)

@@ -122,6 +122,10 @@ pub fn load<'gc>(
 
     let loader_url = activation.caller_movie_or_root().url().to_string();
     crate::sxd_watch::note_loader_start(request.url());
+    crate::sxd_watch::loader_pending_add(
+        gc_arena::Gc::as_ptr(loader_info.0) as usize,
+        request.url(),
+    );
 
     let future = activation.context.load_manager.load_movie_into_clip(
         activation.context.player_handle(),

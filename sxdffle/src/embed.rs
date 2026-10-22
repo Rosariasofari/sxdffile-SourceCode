@@ -2306,6 +2306,56 @@ fn render_thread(
                         lidle as f64 / 1000.0,
                         lurl
                     );
+                    let pend = ruffle_core::sxd_watch::loader_pending();
+                    if !pend.is_empty() {
+                        let items: Vec<String> = pend
+                            .iter()
+                            .map(|(u, ms)| {
+                                format!(
+                                    "{:.0}s {}",
+                                    *ms as f64 / 1000.0,
+                                    u.rsplit('/').next().unwrap_or(u)
+                                )
+                            })
+                            .collect();
+                        log::info!(
+                            "SXDffle embed: 未完成加载 {} 个 · {}",
+                            pend.len(),
+                            items.join(" · ")
+                        );
+                    }
+                }
+                // 发送侧：卡住时「游戏到底有没有把请求发出去」。
+                let (txn, txb, txidle) = ruffle_core::socket::socket_tx_stats();
+                if txn > 0 {
+                    let idle = match txidle {
+                        Some(ms) => format!("{:.1}s", ms as f64 / 1000.0),
+                        None => "从未".to_string(),
+                    };
+                    let rs = ruffle_core::socket::recent_sends();
+                    let items: Vec<String> = rs
+                        .iter()
+                        .rev()
+                        .take(4)
+                        .map(|(ms, n, h)| {
+                            format!(
+                                "{:.1}s/{}B/{:02x}{:02x}{:02x}{:02x}",
+                                *ms as f64 / 1000.0,
+                                n,
+                                h[0],
+                                h[1],
+                                h[2],
+                                h[3]
+                            )
+                        })
+                        .collect();
+                    log::info!(
+                        "SXDffle embed: Socket 发送 {} 次 / 累计 {}KB · 最近发送 {}前 {}",
+                        txn,
+                        txb / 1024,
+                        idle,
+                        items.join(" · ")
+                    );
                 }
 
                 // CoerceS 归因（0.261136）：对象转字符串的总量、慢点、单次最坏。
