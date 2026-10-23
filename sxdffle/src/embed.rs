@@ -1958,12 +1958,14 @@ fn render_thread(
                     // 宁可让「预载了但这一场没上场的单位」早点丢字节，
                     // 也不能等它把进程顶死。真机上如果出现「后出场的单位缺帧」，
                     // 说明 45 秒太激进，往回调到 60/75 即可（这行就是旋钮）。
+                    // SXDffle 0.261151：字节已可重放，摘库不再担心「丢了就画不出」，
+                    // 45/90 两档各收紧一档；180 那档保留，它管的是「真的很久没动」。
                     let idle = if quiet >= 20 {
-                        45
+                        30
                     } else if rss_now >= 4200 {
-                        45
+                        30
                     } else if rss_now >= 3500 {
-                        90
+                        60
                     } else {
                         SWEEP_IDLE_SWF_IDLE_SECS
                     };
@@ -1974,12 +1976,14 @@ fn render_thread(
                     // 判据只看 `last_active`：正在播的部每帧都会推进时间轴，
                     // 不会被误伤；加载完但在后台待命的部 2~10 秒后就放掉。
                     let (en, eb, idle_ev) = if rss_now >= 3300 {
+                        // SXDffle 0.261151：实测「重放 0 次」，说明判据仍有安全余量，
+                        // 整体收紧一档。真机上如果 `重放` 开始涨，把这三个数各加 2 即可。
                         let ev_idle = if rss_now >= 4000 {
-                            2
+                            1
                         } else if rss_now >= 3600 {
-                            5
+                            3
                         } else {
-                            10
+                            6
                         };
                         let (n, b) = pl.evict_resident_data(ev_idle);
                         (n, b, ev_idle)

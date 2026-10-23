@@ -39,7 +39,7 @@ pub const WINDOW: usize = 256 * 1024;
 ///
 /// 一部电影的前 256KB 通常是 Definition 类 tag（角色、图片、字体），
 /// 播放时反复被查表命中；保住它们能让多数「只读前面」的访问零重放。
-pub const KEEP_HEAD: usize = 128 * 1024;
+pub const KEEP_HEAD: usize = 64 * 1024;
 
 /// 单个 SWF 的上限，与 `swf::read::MAX_DATA_CAPACITY` 保持一致。
 const MAX_LEN: usize = 128 * 1024 * 1024;
