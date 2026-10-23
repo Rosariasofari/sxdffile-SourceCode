@@ -563,6 +563,9 @@ impl<'gc> Library<'gc> {
             // 顺手把剩下的窗口也放掉（可能已经是 0）。
             bytes += movie.evict_data();
             self.movie_libraries.0.remove(&movie);
+            // SXDffle 0.261156：之前这个计数器从没被调用过，
+            // 日志里 `Library 回收` 长期是 0，看起来像「一个都没回收」。
+            crate::loader_stats::note_library_pruned();
             n += 1;
         }
         (n, bytes)

@@ -2227,7 +2227,11 @@ fn render_thread(
                     // 记账，所以 slab 那一档是账面值的两倍。`alloc_tag_stats`
                     // 已经做过换算，直接把它减掉就是物理近似值。
                     let (tag_bytes, _) = crate::alloc_tag_stats();
-                    let slab_physical = tag_bytes[12];
+                    // 注意：tag_bytes[12] 是 **账面**（slab 按 2MB 记账）。
+                    // 物理只有一半，所以虚增量 = 账面/2。
+                    // 0.261155 直接减账面，把 446MB 多减了，导致「物理」偏小。
+                    let slab_face = tag_bytes[12];
+                    let slab_physical = slab_face / 2;
                     log::info!(
                         "SXDffle embed: 堆分配档位 合计 {}MB（账面）· {}MB（物理，扣除 slab 对齐虚增 {}MB）· {}",
                         total / (1024 * 1024),
