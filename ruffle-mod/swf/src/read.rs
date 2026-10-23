@@ -2604,20 +2604,26 @@ pub fn read_compression_type<R: Read>(mut input: R) -> Result<Compression> {
 // 窗口存储（`ruffle_common::swf_store`）据此按 256KB 前进，并能把用过的窗口
 // 整段丢掉、需要时从原始压缩字节重新走一遍。
 
-/// 把 `Arc<Vec<u8>>` 包成 `Read`，重放时不必拷贝整份 SWF。
+/// 把「一段可当切片看的数据」包成 `Read`，重放时不必拷贝整份 SWF。
+///
+/// 用 trait object 而不是具体的 `Arc<Vec<u8>>`：调用方可以把原始字节
+/// 放在内存里，也可以放在磁盘映射里（窗口存储的 raw 落盘就是这么做的）。
+pub type SwfRaw = std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>;
+
 struct ArcCursor {
-    data: std::sync::Arc<Vec<u8>>,
+    data: SwfRaw,
     pos: usize,
 }
 
 impl Read for ArcCursor {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let left = self.data.len().saturating_sub(self.pos);
+        let data = self.data.as_ref().as_ref();
+        let left = data.len().saturating_sub(self.pos);
         let n = left.min(buf.len());
         if n == 0 {
             return Ok(0);
         }
-        buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+        buf[..n].copy_from_slice(&data[self.pos..self.pos + n]);
         self.pos += n;
         Ok(n)
     }
@@ -2650,7 +2656,7 @@ impl SwfBodyDecoder {
     /// 构造解压器。`input` 是完整的 SWF 文件字节（含 3+5 字节头）。
     ///
     /// 返回时已经跳过 SWF 头，`remaining()` 即 tag stream 长度。
-    pub fn new(input: std::sync::Arc<Vec<u8>>) -> Result<Self> {
+    pub fn new(input: SwfRaw) -> Result<Self> {
         let mut cur = ArcCursor {
             data: input,
             pos: 0,

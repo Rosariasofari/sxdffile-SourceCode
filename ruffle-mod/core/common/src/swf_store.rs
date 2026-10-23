@@ -24,11 +24,12 @@
 //! 整部重放 2~3ms，可以接受；`KEEP_HEAD` 还会保住 SWF 头部那一小段，
 //! 让「只读开头」的路径不必重放。
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
-use memmap2::{MmapMut, UncheckedAdvice};
-use swf::read::SwfBodyDecoder;
+use memmap2::{Mmap, MmapMut, UncheckedAdvice};
+use swf::read::{SwfBodyDecoder, SwfRaw};
 use swf::HeaderExt;
 
 /// 解压窗口粒度。逐出也按这个粒度对齐。
@@ -48,6 +49,79 @@ const PAGE: usize = 4096;
 
 /// SWF 文件头长度：3 字节签名 + 1 字节版本 + 4 字节解压总长。
 const FILE_HEADER_LEN: usize = 8;
+
+// ---- raw 落盘 ----
+//
+// 窗口存储要能「逐出后再重放」，就必须留住原始压缩字节；而这份字节
+// 在稳态里是最大的一项（战报 402 部约 520MB）。它只是**重放的原料**，
+// 平时一个字节都不读，却占着匿名页 —— 系统回收不了，mimalloc 也不敢动。
+//
+// 写到应用缓存目录再 mmap 只读：内存里只剩页缓存，内核随时可以回收，
+// 下次读的时候从文件重新调页。实测这部分能从 RSS 里整体挪出去。
+static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
+static RAW_SEQ: AtomicU64 = AtomicU64::new(0);
+static PERSISTED: AtomicU64 = AtomicU64::new(0);
+static PERSIST_BYTES: AtomicU64 = AtomicU64::new(0);
+
+/// 设置 raw 落盘目录（应用缓存目录）。不设置则全部留在内存里。
+pub fn set_cache_dir(dir: PathBuf) {
+    let _ = CACHE_DIR.set(dir);
+}
+
+/// 清掉上次进程遗留的 raw 文件。
+pub fn clear_cache_dir(dir: &Path) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let name = e.file_name();
+        if name.to_string_lossy().starts_with("swfraw_") {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
+}
+
+/// `(落盘份数, 落盘字节)`。
+pub fn persist_stats() -> (u64, u64) {
+    (
+        PERSISTED.load(Ordering::Relaxed),
+        PERSIST_BYTES.load(Ordering::Relaxed),
+    )
+}
+
+/// 磁盘上的原始字节：只读映射 + 生命周期结束时删文件。
+struct RawFile {
+    map: Mmap,
+    path: PathBuf,
+}
+
+impl AsRef<[u8]> for RawFile {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        &self.map
+    }
+}
+
+impl Drop for RawFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// 把原始字节写到缓存目录并映射回来。失败就返回 `None`（继续用内存）。
+fn persist_raw(raw: &SwfRaw) -> Option<Arc<RawFile>> {
+    let dir = CACHE_DIR.get()?;
+    let bytes = raw.as_ref().as_ref();
+    let seq = RAW_SEQ.fetch_add(1, Ordering::Relaxed);
+    let path = dir.join(format!("swfraw_{}_{seq}.bin", std::process::id()));
+    std::fs::write(&path, bytes).ok()?;
+    let file = std::fs::File::open(&path).ok()?;
+    // SAFETY: 文件写完才映射，之后不再写入；只读映射，长度固定。
+    let map = unsafe { Mmap::map(&file).ok()? };
+    PERSISTED.fetch_add(1, Ordering::Relaxed);
+    PERSIST_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+    Some(Arc::new(RawFile { map, path }))
+}
 
 // ---- 统计 ----
 static STORES: AtomicU64 = AtomicU64::new(0);
@@ -77,7 +151,7 @@ enum Region {
     Heap(Box<[u8]>),
     /// 未压缩 SWF（FWS）：数据本来就在 `raw` 里，**再复制一份纯属浪费**。
     /// 直接借用，跳过复制与映射；代价是不能逐出（逐出也没有收益）。
-    Borrowed(Arc<Vec<u8>>, usize),
+    Borrowed(SwfRaw, usize),
 }
 
 impl Region {
@@ -86,7 +160,7 @@ impl Region {
         match self {
             Region::Mapped(m) => m.as_ptr(),
             Region::Heap(v) => v.as_ptr(),
-            Region::Borrowed(v, off) => unsafe { v.as_ptr().add(*off) },
+            Region::Borrowed(v, off) => unsafe { v.as_ref().as_ref().as_ptr().add(*off) },
         }
     }
 
@@ -114,7 +188,9 @@ pub struct SwfStore {
     region: Region,
     len: usize,
     /// 原始文件字节（压缩态）。逐出后靠它重放。
-    raw: Arc<Vec<u8>>,
+    ///
+    /// 通常是磁盘映射（`RawFile`），只有在缓存目录不可用或很小的时候才留在内存。
+    raw: SwfRaw,
     /// 最近一次真正读字节的「进程内秒数」。
     ///
     /// 比 `last_active` 更贴近「还要不要数据」：`run_frame` 只在帧开头打点一次，
@@ -134,7 +210,12 @@ impl SwfStore {
     /// 构造存储。返回 `(存储, 扩展头)`。
     ///
     /// 只解压开头一小段用于解析文件头，其余部分等真正被读到时再解压。
-    pub fn new(raw: Arc<Vec<u8>>) -> swf::error::Result<(Arc<Self>, HeaderExt)> {
+    pub fn new(raw_mem: Arc<Vec<u8>>) -> swf::error::Result<(Arc<Self>, HeaderExt)> {
+        // 大一点的都落盘：匿名页换页缓存，RSS 直接掉，读的时候内核再调页。
+        let raw: SwfRaw = match persist_raw(&(raw_mem.clone() as SwfRaw)) {
+            Some(file) => file,
+            None => raw_mem,
+        };
         let mut decoder = SwfBodyDecoder::new(raw.clone())?;
         // 总长要用 `total_len()`：构造时已经读进 `pending` 的那几十字节
         // 也属于 tag stream，用 `remaining()` 会把它漏掉。
@@ -350,7 +431,7 @@ impl SwfStore {
     /// 原始压缩字节的长度。
     #[inline]
     pub fn raw_len(&self) -> usize {
-        self.raw.len()
+        self.raw.as_ref().as_ref().len()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -365,7 +446,7 @@ impl std::fmt::Debug for SwfStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SwfStore")
             .field("len", &self.len)
-            .field("raw", &self.raw.len())
+            .field("raw", &self.raw_len())
             .field("mapped", &self.region.is_mapped())
             .finish()
     }
@@ -430,6 +511,26 @@ mod tests {
 
     fn replays() -> u64 {
         swf_store_stats().2
+    }
+
+    /// 落盘路径也要能正常读回来：写文件 → mmap → 切片 → 重放。
+    #[test]
+    fn persisted_raw_survives_replay() {
+        let dir = std::env::temp_dir().join(format!("sxd_swf_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        set_cache_dir(dir.clone());
+
+        let raw = build_swf(1 << 20);
+        let reference = swf::read::decompress_swf(&raw[..]).unwrap();
+        let (store, _header) = SwfStore::new(Arc::new(raw)).unwrap();
+
+        assert_eq!(store.slice(0, store.len()), &reference.data[..]);
+        let freed = store.evict();
+        assert!(freed > 0);
+        // 逐出后重放，数据要从磁盘映射里读回来。
+        assert_eq!(store.slice(0, store.len()), &reference.data[..]);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

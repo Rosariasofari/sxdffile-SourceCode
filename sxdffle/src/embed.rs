@@ -1144,6 +1144,19 @@ impl Drop for EmbedSession {
 pub fn start(config: EmbedConfig, window: AndroidSurfaceWindow) -> Box<EmbedSession> {
     install_panic_logger();
     ensure_mem_monitor();
+
+    // SXDffle 0.261147：SWF 原始压缩字节落盘的目录。
+    //
+    // 窗口解压要能重放，就必须留住压缩字节；战报 400 多部约 500MB，
+    // 全是匿名页，系统收不走、mimalloc 也不敢动。写到缓存目录再 mmap，
+    // 内存里只剩页缓存，内核随时可以回收。
+    {
+        let dir = std::path::PathBuf::from(&config.storage_dir);
+        if std::fs::create_dir_all(&dir).is_ok() {
+            ruffle_common::swf_store::clear_cache_dir(&dir);
+            ruffle_common::swf_store::set_cache_dir(dir);
+        }
+    }
     let (tx, rx) = channel();
     let status = Arc::new(AtomicI32::new(STATUS_INIT));
     let frames = Arc::new(AtomicU64::new(0));
@@ -2152,8 +2165,9 @@ fn render_thread(
                     // 重放次数是这套机制的代价指标 —— 每秒几十次说明窗口丢得太狠。
                     let (st_n, st_map, st_replay, st_us, st_evict, st_evict_b) =
                         ruffle_common::swf_store::swf_store_stats();
+                    let (p_n, p_b) = ruffle_common::swf_store::persist_stats();
                     log::info!(
-                        "SXDffle embed: SWF 数据常驻 {} 部 / {}MB · 窗口 {} 部/映射 {}MB · 逐出 {} 次/{}MB · 重放 {} 次/{}ms",
+                        "SXDffle embed: SWF 数据常驻 {} 部 / {}MB · 窗口 {} 部/映射 {}MB · 逐出 {} 次/{}MB · 重放 {} 次/{}ms · raw 落盘 {} 份/{}MB",
                         mv_n,
                         mv_b / (1024 * 1024),
                         st_n,
@@ -2161,7 +2175,9 @@ fn render_thread(
                         st_evict,
                         st_evict_b / (1024 * 1024),
                         st_replay,
-                        st_us / 1000
+                        st_us / 1000,
+                        p_n,
+                        p_b / (1024 * 1024)
                     );
                 }
                 // 大块分配来源：64K 以上的 1900 次分配合计 688MB，
