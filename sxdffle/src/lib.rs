@@ -56,6 +56,29 @@ static BUCKET_COUNTS: [std::sync::atomic::AtomicUsize; ALLOC_BUCKETS] = [
     std::sync::atomic::AtomicUsize::new(0),
 ];
 
+// ---- 尺寸档 × 标签 交叉统计（0.261155）----
+//
+// 常态 1534MB 里，`1K-4K` 68MB + `4K-16K` 96MB + `16K-64K` 86MB 合计 250MB，
+// 但一直不知道这些中等块属于谁 —— 现有档位只按尺寸、大块归属只按标签，
+// 两个维度没有交叉，所以这 250MB 始终是个黑洞。
+//
+// 只在 size >= 1024 时更新：1K 以上的分配只有几万个，每帧多几十次原子操作
+// 可以忽略；小对象那一档数量上百万，不参与。
+static BUCKET_TAG: [std::sync::atomic::AtomicUsize; ALLOC_BUCKETS * TAG_COUNT] =
+    [const { std::sync::atomic::AtomicUsize::new(0) }; ALLOC_BUCKETS * TAG_COUNT];
+
+/// 取「尺寸档 × 标签」的存活字节。返回 `[bucket][tag]`。
+pub fn alloc_bucket_tag_stats() -> [[usize; TAG_COUNT]; ALLOC_BUCKETS] {
+    use std::sync::atomic::Ordering::Relaxed;
+    let mut out = [[0usize; TAG_COUNT]; ALLOC_BUCKETS];
+    for b in 0..ALLOC_BUCKETS {
+        for t in 0..TAG_COUNT {
+            out[b][t] = BUCKET_TAG[b * TAG_COUNT + t].load(Relaxed);
+        }
+    }
+    out
+}
+
 // ---- 大块存活归因（≥64KB）----
 //
 // 按阶段的「累计分配」不能说明谁**占着**内存：AS3 里分配的对象是在 GC 阶段
@@ -331,6 +354,12 @@ fn note_alloc(ptr: *mut u8, size: usize) {
     let b = alloc_bucket(size);
     BUCKET_BYTES[b].fetch_add(size, Relaxed);
     BUCKET_COUNTS[b].fetch_add(1, Relaxed);
+    if size >= 1024 {
+        let t = ruffle_core::alloc_tag::current() as usize;
+        if t < TAG_COUNT {
+            BUCKET_TAG[b * TAG_COUNT + t].fetch_add(size, Relaxed);
+        }
+    }
     if size >= 65536 {
         big_register(ptr as usize, size, ruffle_core::alloc_tag::current());
         // 直方图（Mutex + 512 项线性查找）只对 ≥1MB 的块维护。
@@ -345,6 +374,14 @@ fn note_alloc(ptr: *mut u8, size: usize) {
 fn note_free(ptr: *mut u8, size: usize, tag: u8) {
     use std::sync::atomic::Ordering::Relaxed;
     let b = alloc_bucket(size);
+    if size >= 1024 {
+        let t = tag as usize;
+        if t < TAG_COUNT {
+            let _ = BUCKET_TAG[b * TAG_COUNT + t].fetch_update(Relaxed, Relaxed, |v| {
+                Some(v.saturating_sub(size))
+            });
+        }
+    }
     if size >= 65536 {
         big_unregister(ptr as usize);
     }

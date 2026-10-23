@@ -2221,11 +2221,44 @@ fn render_thread(
                             ));
                         }
                     }
+                    // SXDffle 0.261155：账面 vs 物理。
+                    //
+                    // GC slab 为了 1MB 对齐按 2MB 向系统申请，档位按 layout.size
+                    // 记账，所以 slab 那一档是账面值的两倍。`alloc_tag_stats`
+                    // 已经做过换算，直接把它减掉就是物理近似值。
+                    let (tag_bytes, _) = crate::alloc_tag_stats();
+                    let slab_physical = tag_bytes[12];
                     log::info!(
-                        "SXDffle embed: 堆分配档位 合计 {}MB · {}",
+                        "SXDffle embed: 堆分配档位 合计 {}MB（账面）· {}MB（物理，扣除 slab 对齐虚增 {}MB）· {}",
                         total / (1024 * 1024),
+                        total.saturating_sub(slab_physical) / (1024 * 1024),
+                        slab_physical / (1024 * 1024),
                         parts.join(" · ")
                     );
+
+                    // SXDffle 0.261155：中等块（1K~64K）按标签拆开。
+                    // 常态这 250MB 一直是个黑洞：知道尺寸、不知道主人。
+                    let cross = crate::alloc_bucket_tag_stats();
+                    let mut detail: Vec<String> = Vec::new();
+                    for b in 3..crate::ALLOC_BUCKETS {
+                        let mut items: Vec<(usize, usize)> = (0..13)
+                            .map(|t| (t, cross[b][t]))
+                            .filter(|(_, v)| *v >= 1024 * 1024)
+                            .collect();
+                        if items.is_empty() {
+                            continue;
+                        }
+                        items.sort_by(|a, c| c.1.cmp(&a.1));
+                        items.truncate(3);
+                        let seg: Vec<String> = items
+                            .iter()
+                            .map(|(t, v)| format!("{}{}MB", crate::TAG_LABELS[*t], v / (1024 * 1024)))
+                            .collect();
+                        detail.push(format!("{}: {}", crate::ALLOC_BUCKET_LABELS[b], seg.join("/")));
+                    }
+                    if !detail.is_empty() {
+                        log::info!("SXDffle embed: 中块明细 {}", detail.join(" · "));
+                    }
                 }
                 let (swf_n, swf_comp, swf_raw) = ruffle_core::swf_load_stats();
                 log::info!(
