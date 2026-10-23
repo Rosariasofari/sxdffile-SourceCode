@@ -2028,9 +2028,13 @@ fn render_thread(
                         drop(pl);
                         unsafe { libmimalloc_sys::mi_collect(true) };
                         log::info!(
-                            "SXDffle embed: 摘除闲置电影库 {} 部 / {}MB + 立即回收（idle {}s · 静止 {}s · RSS {}MB → {}MB · GC 对象 {} → {}）",
+                            "SXDffle embed: 摘除闲置电影库 {} 部 / {}（字节+角色+纹理）+ 立即回收（idle {}s · 静止 {}s · RSS {}MB → {}MB · GC 对象 {} → {}）",
                             sn,
-                            sb / (1024 * 1024),
+                            if sb == 0 {
+                                "字节已提前逐出".to_string()
+                            } else {
+                                format!("{}MB", sb / (1024 * 1024))
+                            },
                             idle,
                             quiet,
                             rss_now,
@@ -2288,7 +2292,9 @@ fn render_thread(
                     .unwrap_or(0);
                 let prev = LAST_SMAPS.swap(now_s, Ordering::Relaxed);
                 let top = if now_s.saturating_sub(prev) >= 60 {
-                    mem_top_mappings(8)
+                    // SXDffle 0.261150：8 项不够 —— 稳态 3.1GB 里映射 TOP 只覆盖
+                    // 1.4GB，剩下 1.7GB 落在第 9~16 名里看不清。加到 16 项。
+                    mem_top_mappings(16)
                 } else {
                     Vec::new()
                 };
