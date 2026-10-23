@@ -444,6 +444,30 @@ impl SwfMovieData {
         self.store.last_use_secs()
     }
 
+    /// 是否已经「冷却」到可以整条回收。
+    ///
+    /// SXDffle 0.261148：**必须独立于 `try_release_data` 的返回值判断。**
+    ///
+    /// 0.261145 把「丢字节」从「丢掉整个 `Arc<Vec<u8>>`」改成了「逐出解压窗口」，
+    /// 返回值也随之变成「这一次新释放的字节数」。于是出现过一次的情况：
+    /// 字节早在 `evict_resident_data` 里就逐出了，`try_release_data` 再调时
+    /// `evict()` 返回 0 —— 摘库的调用方把它当成「这部电影还不该回收」，
+    /// 整条摘库路径**再也没触发过**（实测 `摘除闲置` 一行都没有，
+    /// 退出战报后 RSS 卡在 3.9GB）。
+    pub fn idle_for(&self, now_secs: u32, idle_secs: u32) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        if !self.loaded.load(Relaxed) {
+            return false;
+        }
+        if now_secs.saturating_sub(self.last_used.load(Relaxed)) < idle_secs {
+            return false;
+        }
+        if now_secs.saturating_sub(self.last_active.load(Relaxed)) < idle_secs {
+            return false;
+        }
+        true
+    }
+
     /// 立刻逐出解压窗口（不看 idle）。
     ///
     /// SXDffle：这是窗口存储才有的能力 —— 字节丢了能重放回来，

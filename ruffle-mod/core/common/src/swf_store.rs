@@ -120,6 +120,19 @@ fn persist_raw(raw: &SwfRaw) -> Option<Arc<RawFile>> {
     let map = unsafe { Mmap::map(&file).ok()? };
     PERSISTED.fetch_add(1, Ordering::Relaxed);
     PERSIST_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+
+    // 关键：映射完立刻把页从 RSS 里丢掉。
+    //
+    // 文件映射的页属于页缓存，**默认会一直算在进程 RSS 里** —— 0.261147 实测
+    // 640 份 / 753MB 全挂在 RSS 上，反而比落盘前的 520MB 匿名页更差。
+    // `MADV_DONTNEED` 对文件映射是「丢弃页，下次访问从文件重新读」，
+    // 数据不会丢（文件还在），只是把常驻换成按需调页。
+    //
+    // 代价：第一次重放要读闪存（1.3MB 约几毫秒）。实测 `重放 0 次`，
+    // 说明这条路径几乎不发生。
+    unsafe {
+        let _ = map.unchecked_advise(UncheckedAdvice::DontNeed);
+    }
     Some(Arc::new(RawFile { map, path }))
 }
 

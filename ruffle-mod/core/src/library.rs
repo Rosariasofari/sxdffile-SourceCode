@@ -554,11 +554,14 @@ impl<'gc> Library<'gc> {
             {
                 continue;
             }
-            let freed = movie.try_release_data(now, idle_secs);
-            if freed == 0 {
+            // SXDffle 0.261148：判据用 `idle_for`，不再看「这次释放了多少字节」。
+            // 字节可能早已被 `evict_resident_data` 逐出，再逐出就是 0 ——
+            // 用返回值判断会让摘库永远不触发。
+            if !movie.idle_for(now, idle_secs) {
                 continue;
             }
-            bytes += freed;
+            // 顺手把剩下的窗口也放掉（可能已经是 0）。
+            bytes += movie.evict_data();
             self.movie_libraries.0.remove(&movie);
             n += 1;
         }
