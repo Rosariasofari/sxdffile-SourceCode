@@ -138,6 +138,11 @@ pub struct SwfMovieData {
     /// 每帧都会从 `swf_data` 里读 tag（Place/Remove/帧脚本），
     /// 而它**不会**去查库表 —— 只用 `last_used` 判断会把正在播的动画的字节丢掉。
     last_active: Arc<std::sync::atomic::AtomicU32>,
+    /// 游戏是否已经对这个 SWF 调过 `Loader.unload()`。
+    ///
+    /// SXDffle 0.261154：unload 之后摘库的冷却可以大幅缩短 ——
+    /// 游戏自己说「不再需要它了」，我们没必要再等 30~180 秒。
+    unloaded: Arc<std::sync::atomic::AtomicBool>,
 
     /// The URL the SWF was downloaded from.
     url: String,
@@ -191,6 +196,7 @@ impl SwfMovieData {
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             url,
             loader_url,
             parameters: Vec::new(),
@@ -224,6 +230,7 @@ impl SwfMovieData {
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             url,
             loader_url,
             parameters: Vec::new(),
@@ -258,6 +265,7 @@ impl SwfMovieData {
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             url,
             loader_url,
             parameters: Vec::new(),
@@ -285,6 +293,7 @@ impl SwfMovieData {
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             url: movie_url,
             loader_url: None,
             parameters: Vec::new(),
@@ -333,6 +342,7 @@ impl SwfMovieData {
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             url,
             loader_url,
             parameters: Vec::new(),
@@ -366,6 +376,7 @@ impl SwfMovieData {
             loaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             url,
             loader_url: None,
             parameters: Vec::new(),
@@ -459,13 +470,41 @@ impl SwfMovieData {
         if !self.loaded.load(Relaxed) {
             return false;
         }
-        if now_secs.saturating_sub(self.last_used.load(Relaxed)) < idle_secs {
-            return false;
+        // SXDffle 0.261154：判据从「查表时间」改成「时间轴推进时间」。
+        //
+        // `last_used` 会被 `library_for_movie()` 每次查表刷新，而游戏在战报结束后
+        // 仍会频繁查表（结算界面、角色面板、预加载），于是这些库永远「不冷」——
+        // 实测游戏 unload 了 2113 次，我们的 `Library 回收` 是 **0 个**。
+        //
+        // `last_active` 只在 MovieClip 真正推进时间轴时刷新，播完就停，
+        // 才真正代表「这部电影不再需要了」。
+        //
+        // 对「从没推进过时间轴」的纯资源库（只用来 attach），`last_active` 恒为 0，
+        // 此时退回 `last_used` 兜底，避免刚加载就被摘。
+        let effective = if self.unloaded.load(Relaxed) {
+            // 游戏已经说过不要了，10 秒足够覆盖「同一帧还在用」的情况。
+            idle_secs.min(10)
+        } else {
+            idle_secs
+        };
+        let last_active = self.last_active.load(Relaxed);
+        if last_active == 0 {
+            return now_secs.saturating_sub(self.last_used.load(Relaxed)) >= effective;
         }
-        if now_secs.saturating_sub(self.last_active.load(Relaxed)) < idle_secs {
-            return false;
-        }
-        true
+        now_secs.saturating_sub(last_active) >= effective
+    }
+
+    /// 标记「游戏已 unload 这个 SWF」。
+    #[inline]
+    pub fn mark_unloaded(&self) {
+        self.unloaded
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 是否已被游戏 unload。
+    #[inline]
+    pub fn is_unloaded(&self) -> bool {
+        self.unloaded.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// 立刻逐出解压窗口（不看 idle）。

@@ -267,6 +267,14 @@ impl<'gc> LoaderInfoObject<'gc> {
     pub fn unload(self, context: &mut UpdateContext<'gc>) {
         // SXDffle：统计卸载调用。用来回答「游戏到底卸不卸载资源」。
         crate::loader_stats::note_unload();
+
+        // SXDffle 0.261154：记下「游戏主动卸载了这部电影」。
+        //
+        // 之前摘库只按 `last_used`（查表时间）判冷，而游戏即使在战报结束后
+        // 仍会频繁查表，导致这些库永远不冷 —— 实测 unload 2113 次、
+        // `Library 回收` 始终是 0 个，战报的 400 多部库永久驻留约 1.2GB。
+        // 打上标记后，摘库用 10 秒冷却即可回收。
+        self.loader_stream().movie().mark_unloaded();
         let mut loader = self
             .0
             .loader
