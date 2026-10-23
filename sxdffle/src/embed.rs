@@ -1987,25 +1987,59 @@ fn render_thread(
                         (0, 0, 0)
                     };
                     if eb > 0 {
+                        let big = eb >= 100 * 1024 * 1024;
+                        let (gb, ga) = if big {
+                            pl.force_full_gc()
+                        } else {
+                            (0, 0)
+                        };
                         log::info!(
-                            "SXDffle embed: 逐出解压窗口 {} 部 / {}MB（idle {}s · RSS {}MB）",
+                            "SXDffle embed: 逐出解压窗口 {} 部 / {}MB（idle {}s · RSS {}MB{}{}）",
                             en,
                             eb / (1024 * 1024),
                             idle_ev,
-                            rss_now
+                            rss_now,
+                            if big {
+                                " · 大额逐出，立即 GC"
+                            } else {
+                                ""
+                            },
+                            if big {
+                                format!(" · 对象 {} → {}", gb, ga)
+                            } else {
+                                String::new()
+                            }
                         );
+                        if big {
+                            unsafe { libmimalloc_sys::mi_collect(true) };
+                        }
                     }
                     let (sn, sb) = pl.sweep_idle_movies(idle);
-                    drop(pl);
+                    // SXDffle 0.261149：摘完库立刻把 GC 跑完，别等泵。
+                    //
+                    // 库摘掉了只是「表项没了」，204 部电影的角色表 / Shape /
+                    // BitmapHandle 还得等 GC 回收、再等 mimalloc 还页。
+                    // 实测这段延迟有 5 分钟（11:03 摘 204 部 → 11:06 才降到 3.1GB），
+                    // 而 PC 端退出战报 3 秒就回到常态 —— 差的就是这一下。
                     if sn > 0 {
+                        // 一次完整 mark/sweep。摘库是低频事件（几十秒一次），
+                        // 卡 1 秒换掉 5 分钟的迟缓，值。
+                        let (gb, ga) = pl.force_full_gc();
+                        drop(pl);
+                        unsafe { libmimalloc_sys::mi_collect(true) };
                         log::info!(
-                            "SXDffle embed: 摘除闲置电影库 {} 部 / {}MB（字节+角色+纹理 · idle {}s · 静止 {}s · RSS {}MB）",
+                            "SXDffle embed: 摘除闲置电影库 {} 部 / {}MB + 立即回收（idle {}s · 静止 {}s · RSS {}MB → {}MB · GC 对象 {} → {}）",
                             sn,
                             sb / (1024 * 1024),
                             idle,
                             quiet,
-                            rss_now
+                            rss_now,
+                            rss_mb(),
+                            gb,
+                            ga
                         );
+                    } else {
+                        drop(pl);
                     }
                 }
                 const RELEASE_COLD_SWF_IDLE_SECS: u32 = 20; // 只对「无时间轴角色」的电影生效
