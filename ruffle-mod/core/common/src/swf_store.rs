@@ -59,6 +59,8 @@ const FILE_HEADER_LEN: usize = 8;
 // 写到应用缓存目录再 mmap 只读：内存里只剩页缓存，内核随时可以回收，
 // 下次读的时候从文件重新调页。实测这部分能从 RSS 里整体挪出去。
 static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
+/// 所有还活着的落盘映射。重放会把文件页读回 RSS，需要能再次丢掉。
+static RAW_FILES: Mutex<Vec<std::sync::Weak<RawFile>>> = Mutex::new(Vec::new());
 static RAW_SEQ: AtomicU64 = AtomicU64::new(0);
 static PERSISTED: AtomicU64 = AtomicU64::new(0);
 static PERSIST_BYTES: AtomicU64 = AtomicU64::new(0);
@@ -120,6 +122,7 @@ fn persist_raw(raw: &SwfRaw) -> Option<Arc<RawFile>> {
     let map = unsafe { Mmap::map(&file).ok()? };
     PERSISTED.fetch_add(1, Ordering::Relaxed);
     PERSIST_BYTES.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+    let file = Arc::new(RawFile { map, path });
 
     // 关键：映射完立刻把页从 RSS 里丢掉。
     //
@@ -131,9 +134,13 @@ fn persist_raw(raw: &SwfRaw) -> Option<Arc<RawFile>> {
     // 代价：第一次重放要读闪存（1.3MB 约几毫秒）。实测 `重放 0 次`，
     // 说明这条路径几乎不发生。
     unsafe {
-        let _ = map.unchecked_advise(UncheckedAdvice::DontNeed);
+        let _ = file.map.unchecked_advise(UncheckedAdvice::DontNeed);
     }
-    Some(Arc::new(RawFile { map, path }))
+    if let Ok(mut v) = RAW_FILES.lock() {
+        v.retain(|w| w.strong_count() > 0);
+        v.push(Arc::downgrade(&file));
+    }
+    Some(file)
 }
 
 // ---- 统计 ----
@@ -641,4 +648,49 @@ mod tests {
         assert_eq!(store.slice(len + 100, len + 200).len(), 0);
         assert_eq!(store.slice(len - 10, len + 1000).len(), 10);
     }
+}
+
+/// 把所有落盘 raw 映射的页**再次**丢掉。
+///
+/// 为什么需要「再次」：`persist_raw` 里已经 madvise 过一次，但窗口存储的
+/// 重放会 `read` 这个映射，内核把缺的页重新调进来 —— 这些页从此就一直挂在
+/// RSS 上，直到进程退出。0.261152 实测：逐出阈值收紧后重放从 99 次涨到 651 次，
+/// 落盘文件里有单个 33MB 的映射整份驻留，抵消掉了 purge 省下的 216MB。
+///
+/// 代价只有缺页：重放一次平均 0.24ms（651 次共 155ms），可以接受。
+pub fn repurge_raw() -> (usize, usize) {
+    let mut n = 0usize;
+    let mut bytes = 0usize;
+    let Ok(mut v) = RAW_FILES.lock() else {
+        return (0, 0);
+    };
+    v.retain(|w| match w.upgrade() {
+        Some(f) => {
+            // SAFETY: 映射只读、长度固定，丢弃后下次访问由内核重新调页。
+            unsafe {
+                let _ = f.map.unchecked_advise(UncheckedAdvice::DontNeed);
+            }
+            n += 1;
+            bytes += f.map.len();
+            true
+        }
+        None => false,
+    });
+    (n, bytes)
+}
+
+/// 当前活着的落盘映射：`(份数, 总字节)`。用来判断它们占了多少 RSS。
+pub fn raw_file_stats() -> (usize, usize) {
+    let Ok(v) = RAW_FILES.lock() else {
+        return (0, 0);
+    };
+    let mut n = 0usize;
+    let mut bytes = 0usize;
+    for w in v.iter() {
+        if let Some(f) = w.upgrade() {
+            n += 1;
+            bytes += f.map.len();
+        }
+    }
+    (n, bytes)
 }

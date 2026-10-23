@@ -268,14 +268,25 @@ fn ensure_mem_monitor() {
                     // 每 20 秒（40 个 500ms）打一次映射排行：战报期间也能看到"谁在涨"
                     tick += 1;
                     if tick % 40 == 0 && mb > 800 {
-                        let top = mem_top_mappings(6);
+                        // SXDffle 0.261153：落盘 raw 的页会在重放时被读回 RSS，
+                        // 而 `persist_raw` 只在写入时丢过一次。0.261152 实测：
+                        // 逐出收紧后重放 651 次，单个 swfraw 文件整份驻留 33MB，
+                        // 把 purge 省下的 216MB 又吃了回去。
+                        //
+                        // 每 20 秒再丢一次；代价只有缺页（651 次重放共 155ms）。
+                        let (rn, _rb) = ruffle_common::swf_store::repurge_raw();
+                        let (f_n, f_b) = ruffle_common::swf_store::raw_file_stats();
+                        let top = mem_top_mappings(8);
                         let line: Vec<String> = top
                             .iter()
                             .map(|(name, m)| format!("{}={}MB", name, m))
                             .collect();
                         log::warn!(
-                            "SXDffle mem: RSS {}MB · 映射 TOP {}",
+                            "SXDffle mem: RSS {}MB · raw 落盘 {} 份/{}MB映射（本轮再丢 {} 份）· 映射 TOP {}",
                             mb,
+                            f_n,
+                            f_b / (1024 * 1024),
+                            rn,
                             line.join(" · ")
                         );
                     }
