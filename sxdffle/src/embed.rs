@@ -1141,9 +1141,93 @@ impl Drop for EmbedSession {
 // ---------------------------------------------------------------------------
 
 /// 创建会话并启动渲染线程，立即返回（不阻塞 UI）。
+// ---- SXDffle 0.261152：把 mimalloc 的「延迟归还」关掉 ----
+//
+// 战报期 RSS 4.6GB，可「有归属」的只有 1.4GB —— 剩下 3.2GB 在 mimalloc 手里。
+// 之前一直以为是「碎片无法回收」，但翻 v3 源码后发现是**三处延迟**：
+//
+//   1. `purge_delay = 1000`  内存 purge 延迟 **整整 1 秒**
+//   2. `page_reclaim_on_free = 0`  只回收「当前 theap 起源」的页，
+//      跨线程释放的 abandoned page 要等下一次 collect
+//   3. `arena_purge_mult = 1` → arena 也是 1 秒
+//
+// 注意：`mimalloc.h` 的注释写的是 `(=10)`，但 v3 的 `src/options.c` 里
+// 实际默认值是 `{ 1000, ... purge_delay }` —— **头文件注释过时了**。
+// 这个数字很关键：1 秒的延迟窗口，在「每秒几十万次分配释放」的 preload 期间
+// 足以让 RSS 冲到远超实际存活量的位置。
+//
+// 第 3 条是关键：战报 preload 在渲染线程分配、主线程释放，
+// 跨线程释放占了绝大多数。这些页被记成 abandoned，只能等 `mi_collect(true)`
+// —— 而 `mi_collect` 连续 13 次「削 0MB」，因为每个 segment 里都还有活块。
+//
+// 我们早在 0.261094 就引入了 mimalloc，但从没调过这三个参数，
+// 等于一直在用「桌面默认」跑一个内存吃紧的移动端场景。
+//
+// 注意：编号是按 `libmimalloc-sys 0.1.49` 内置 v3 的 `mimalloc.h` 枚举顺序数的，
+// crate 只给 v2 导出了常量（`mi_option_max_segment_reclaim` 在 v3 里已废弃）。
+// 所以下面先**读默认值自检**：三个值必须分别是 10 / 10 / 1，
+// 对不上就说明编号漂移了，此时一个都不设，只打一条警告。
+mod mi_opt {
+    /// 内存 purge 延迟（毫秒）；0 = 立即，-1 = 不 purge。v3 实际默认 **1000**。
+    pub const PURGE_DELAY: i32 = 15;
+    /// arena purge 延迟倍数（arena 延迟 = purge_delay × 本值）。v3 默认 1。
+    pub const ARENA_PURGE_MULT: i32 = 24;
+    /// purge 时是否 decommit（MADV_DONTNEED）。v3 默认 1。
+    pub const PURGE_DECOMMITS: i32 = 5;
+    /// 释放时回收 abandoned page：-1 从不 / 0 仅同 theap / 1 总是。v3 默认 0。
+    pub const PAGE_RECLAIM_ON_FREE: i32 = 35;
+}
+
+/// 配置 mimalloc。幂等，只在第一次生效。
+fn configure_mimalloc() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static DONE: AtomicBool = AtomicBool::new(false);
+    if DONE.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    unsafe {
+        let delay = libmimalloc_sys::mi_option_get(mi_opt::PURGE_DELAY);
+        let mult = libmimalloc_sys::mi_option_get(mi_opt::ARENA_PURGE_MULT);
+        let decommit = libmimalloc_sys::mi_option_get(mi_opt::PURGE_DECOMMITS);
+        let reclaim = libmimalloc_sys::mi_option_get(mi_opt::PAGE_RECLAIM_ON_FREE);
+
+        // 指纹校验：四个默认值同时对上，编号才可信。
+        // 1000 这个值足够独特，误判概率极低（比 10 可靠得多）。
+        if delay != 1000 || mult != 1 || decommit != 1 || reclaim != 0 {
+            log::warn!(
+                "SXDffle mimalloc: 选项编号校验失败（读到 purge_delay={} / arena_mult={} / decommit={} / reclaim={}，期望 1000/1/1/0），本轮不做任何设置",
+                delay,
+                mult,
+                decommit,
+                reclaim
+            );
+            return;
+        }
+
+        libmimalloc_sys::mi_option_set(mi_opt::PURGE_DELAY, 0);
+        libmimalloc_sys::mi_option_set(mi_opt::ARENA_PURGE_MULT, 1);
+        libmimalloc_sys::mi_option_set(mi_opt::PAGE_RECLAIM_ON_FREE, 1);
+
+        log::info!(
+            "SXDffle mimalloc: purge_delay {}→{}ms · arena_purge_mult {}→{} · page_reclaim_on_free {}→{}（设置后回读 {}/{}/{} · 期望 0/1/1）",
+            delay,
+            0,
+            mult,
+            1,
+            reclaim,
+            1,
+            libmimalloc_sys::mi_option_get(mi_opt::PURGE_DELAY),
+            libmimalloc_sys::mi_option_get(mi_opt::ARENA_PURGE_MULT),
+            libmimalloc_sys::mi_option_get(mi_opt::PAGE_RECLAIM_ON_FREE)
+        );
+    }
+}
+
 pub fn start(config: EmbedConfig, window: AndroidSurfaceWindow) -> Box<EmbedSession> {
     install_panic_logger();
     ensure_mem_monitor();
+    // 越早越好：让之后所有分配都走「立即归还」的路径。
+    configure_mimalloc();
 
     // SXDffle 0.261147：SWF 原始压缩字节落盘的目录。
     //
