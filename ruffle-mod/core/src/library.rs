@@ -612,6 +612,18 @@ impl<'gc> Library<'gc> {
         (n, bytes)
     }
 
+    /// SXDffle 0.261157：库里有多少部是「游戏已经 unload 过」的。
+    ///
+    /// 这个数字直接回答「还有多少该摘没摘」：如果它是 200 而库总数 284，
+    /// 说明判据还是没放开；如果它是 0，说明剩下的库游戏确实还在用。
+    pub fn unloaded_movie_count(&self) -> usize {
+        self.movie_libraries
+            .known_movies()
+            .iter()
+            .filter(|m| m.is_unloaded())
+            .count()
+    }
+
     /// SXDffle：统计还有多少部电影的解压字节仍在内存里。
     pub fn resident_movie_data(&self) -> (usize, usize) {
         let mut n = 0usize;

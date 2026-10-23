@@ -143,6 +143,8 @@ pub struct SwfMovieData {
     /// SXDffle 0.261154：unload 之后摘库的冷却可以大幅缩短 ——
     /// 游戏自己说「不再需要它了」，我们没必要再等 30~180 秒。
     unloaded: Arc<std::sync::atomic::AtomicBool>,
+    /// 调用 `unload` 时的进程内秒数。0 = 从未卸载。
+    unloaded_at: Arc<std::sync::atomic::AtomicU32>,
 
     /// The URL the SWF was downloaded from.
     url: String,
@@ -197,6 +199,7 @@ impl SwfMovieData {
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            unloaded_at: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             url,
             loader_url,
             parameters: Vec::new(),
@@ -231,6 +234,7 @@ impl SwfMovieData {
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            unloaded_at: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             url,
             loader_url,
             parameters: Vec::new(),
@@ -266,6 +270,7 @@ impl SwfMovieData {
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            unloaded_at: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             url,
             loader_url,
             parameters: Vec::new(),
@@ -294,6 +299,7 @@ impl SwfMovieData {
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            unloaded_at: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             url: movie_url,
             loader_url: None,
             parameters: Vec::new(),
@@ -343,6 +349,7 @@ impl SwfMovieData {
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            unloaded_at: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             url,
             loader_url,
             parameters: Vec::new(),
@@ -377,6 +384,7 @@ impl SwfMovieData {
             last_used: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_active: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             unloaded: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            unloaded_at: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             url,
             loader_url: None,
             parameters: Vec::new(),
@@ -481,12 +489,27 @@ impl SwfMovieData {
         //
         // 对「从没推进过时间轴」的纯资源库（只用来 attach），`last_active` 恒为 0，
         // 此时退回 `last_used` 兜底，避免刚加载就被摘。
-        let effective = if self.unloaded.load(Relaxed) {
-            // 游戏已经说过不要了，10 秒足够覆盖「同一帧还在用」的情况。
-            idle_secs.min(10)
-        } else {
-            idle_secs
-        };
+        // SXDffle 0.261157：已卸载的库走独立判据。
+        //
+        // 实测：战报前 40 部库、第二场后 284 部，摘掉的 460 部又被加载回来，
+        // 净剩 244 部 ≈ 1.4GB。原因是 `idle_for` 还在等「时间轴停 30/60/180 秒」，
+        // 而战报结束后游戏仍会推进部分动画，`last_active` 一直新鲜。
+        //
+        // 但游戏已经明确 `unload` 过了 —— 它自己说「不要了」。
+        // 这里改成：卸载 10 秒后，只要时间轴也停了 10 秒，就摘。
+        // 比原来快一个数量级，同时保留「真的还在播就不动」的安全底线。
+        if let Some(since_unload) = self.unloaded_secs_ago(now_secs) {
+            if since_unload < 10 {
+                return false;
+            }
+            let la = self.last_active.load(Relaxed);
+            // 卸载后仍在播（从库里 attach 出来的对象还在动）→ 继续等。
+            if la != 0 && now_secs.saturating_sub(la) < 10 {
+                return false;
+            }
+            return true;
+        }
+        let effective = idle_secs;
         let last_active = self.last_active.load(Relaxed);
         if last_active == 0 {
             return now_secs.saturating_sub(self.last_used.load(Relaxed)) >= effective;
@@ -497,8 +520,24 @@ impl SwfMovieData {
     /// 标记「游戏已 unload 这个 SWF」。
     #[inline]
     pub fn mark_unloaded(&self) {
+        let now = SwfMovieData::now_secs();
         self.unloaded
             .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.unloaded_at
+            .store(now, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 已卸载多久（秒）；未卸载返回 `None`。
+    #[inline]
+    pub fn unloaded_secs_ago(&self, now_secs: u32) -> Option<u32> {
+        if !self.unloaded.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+        let at = self.unloaded_at.load(std::sync::atomic::Ordering::Relaxed);
+        if at == 0 {
+            return None;
+        }
+        Some(now_secs.saturating_sub(at))
     }
 
     /// 是否已被游戏 unload。

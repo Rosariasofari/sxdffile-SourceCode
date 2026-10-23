@@ -2335,15 +2335,19 @@ fn render_thread(
                 // try_lock：这段代码在监控线程里跑，拿不到就跳过，不能阻塞渲染。
                 if let Ok(p) = player.try_lock() {
                     let (mv_n, mv_b) = p.movie_resident_stats();
+                    // SXDffle 0.261157：多少部是「游戏已经说不要了」的。
+                    // 这是判断摘库判据够不够狠的直接指标。
+                    let mv_unloaded = p.unloaded_movie_count();
                     // 窗口存储的账：映射了多少虚拟地址、实际驻留多少、逐出/重放各多少次。
                     // 重放次数是这套机制的代价指标 —— 每秒几十次说明窗口丢得太狠。
                     let (st_n, st_map, st_replay, st_us, st_evict, st_evict_b) =
                         ruffle_common::swf_store::swf_store_stats();
                     let (p_n, p_b) = ruffle_common::swf_store::persist_stats();
                     log::info!(
-                        "SXDffle embed: SWF 数据常驻 {} 部 / {}MB · 窗口 {} 部/映射 {}MB · 逐出 {} 次/{}MB · 重放 {} 次/{}ms · raw 落盘 {} 份/{}MB",
+                        "SXDffle embed: SWF 数据常驻 {} 部 / {}MB（其中已 unload {} 部）· 窗口 {} 部/映射 {}MB · 逐出 {} 次/{}MB · 重放 {} 次/{}ms · raw 落盘 {} 份/{}MB",
                         mv_n,
                         mv_b / (1024 * 1024),
+                        mv_unloaded,
                         st_n,
                         st_map / (1024 * 1024),
                         st_evict,
